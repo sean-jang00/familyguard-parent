@@ -224,6 +224,13 @@ input[type=checkbox].check { width: 22px; height: 22px; accent-color: var(--acce
 .loc-dot.req { opacity: 1; box-shadow: 0 0 0 3px color-mix(in srgb, #3a7bf0 25%, transparent); }
 .tabs button { font-size: 14px; }
 
+/* ── 앱별 한도 일괄 처리 ── */
+.bulk { display: flex; flex-direction: column; gap: 10px; padding: 12px; margin: 4px 0 10px; border-radius: 14px; background: var(--surface-2); }
+.bulk .btns > .btn { flex: 1; }
+.bulk select { min-width: 120px; }
+input[type=search] { width: 100%; min-height: 44px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--text); font: inherit; }
+.row[hidden] { display: none; }
+
 /* ── 앱 잠금 PIN ── */
 .lock-screen { display: flex; flex-direction: column; align-items: center; padding: 6vh 0 24px; }
 .lock-icon { width: 64px; height: 64px; border-radius: 18px; box-shadow: var(--shadow); }

@@ -825,11 +825,26 @@ function tabLimits(d, s, p) {
     </div>
 
     <div class="card">
-      <div class="card-head"><h2>앱별 한도</h2></div>
+      <div class="card-head"><h2>앱별 한도</h2><span class="sub">${appList.length}개</span></div>
       <p class="sub" style="margin-top:-4px">☑ 항상 허용: 취침시간과 하루 전체 한도에서 빠집니다 (학원앱, 사전 등).</p>
+      ${appList.length ? `
+      <div class="bulk">
+        <div class="btns">
+          <button class="btn small" data-bulk="check-all">☑ 전체 체크</button>
+          <button class="btn small" data-bulk="uncheck-all">☐ 전체 해제</button>
+        </div>
+        <div class="row" style="border:0">
+          <select id="bulkLimit" aria-label="일괄 적용할 한도">${APP_LIMITS.map(([v, t]) => `<option value="${v ?? ''}">${t}</option>`).join('')}</select>
+          <button class="btn small primary" data-bulk="apply" style="flex:1">모든 앱에 적용</button>
+        </div>
+        <div class="sub">체크한 앱(항상 허용)은 일괄 적용에서 빠집니다. '제한 없음'을 고르면 모든 한도를 풉니다.</div>
+        <input type="search" id="appSearch" placeholder="앱 이름 검색" value="${esc(state.appSearch || '')}" autocomplete="off">
+      </div>` : ''}
       ${appList.length ? appList.map(([pkg, label]) => {
         const lim = p.dailyLimitsMin[pkg] ?? null;
-        return `<div class="row">
+        const q = (state.appSearch || '').trim().toLowerCase();
+        const hidden = q && !label.toLowerCase().includes(q) && !pkg.toLowerCase().includes(q);
+        return `<div class="row" data-app-row="${esc(`${label} ${pkg}`.toLowerCase())}" ${hidden ? 'hidden' : ''}>
           <input type="checkbox" class="check" data-allow="${esc(pkg)}" ${p.alwaysAllowed.includes(pkg) ? 'checked' : ''} aria-label="${esc(label)} 항상 허용">
           ${avatar(label, pkg)}
           <div class="grow ellipsis">${esc(label)}</div>
@@ -928,6 +943,38 @@ function bindDevice(d, s, p) {
   bind('[data-allow]', 'change', (e) => {
     const pkg = e.target.dataset.allow;
     savePolicy(d, { alwaysAllowed: e.target.checked ? [...new Set([...p.alwaysAllowed, pkg])] : p.alwaysAllowed.filter((x) => x !== pkg) });
+  });
+
+  // 앱별 한도 일괄 처리
+  const allPkgs = [...$app.querySelectorAll('[data-allow]')].map((el) => el.dataset.allow);
+  bind('[data-bulk=check-all]', 'click', () => savePolicy(d, { alwaysAllowed: [...new Set([...p.alwaysAllowed, ...allPkgs])] }, '모든 앱을 항상 허용으로 체크했습니다'));
+  bind('[data-bulk=uncheck-all]', 'click', () => savePolicy(d, { alwaysAllowed: p.alwaysAllowed.filter((x) => !allPkgs.includes(x)) }, '모든 체크를 해제했습니다'));
+  bind('[data-bulk=apply]', 'click', (e) => {
+    const b = e.currentTarget;
+    const raw = q('#bulkLimit').value;
+    const name = APP_LIMITS.find(([v]) => String(v ?? '') === raw)[1];
+    const targets = allPkgs.filter((pkg) => !p.alwaysAllowed.includes(pkg));
+    // 실수 방지: 두 번 눌러야 적용
+    if (b.dataset.confirm !== raw) {
+      b.dataset.confirm = raw;
+      b.textContent = `${targets.length}개 앱을 '${name}'(으)로 — 한 번 더 누르세요`;
+      return;
+    }
+    const limits = { ...p.dailyLimitsMin };
+    targets.forEach((pkg) => { if (raw === '') delete limits[pkg]; else limits[pkg] = Number(raw); });
+    // 체크한 앱의 한도도 '제한 없음'일 때는 함께 푼다 (전체 풀기)
+    if (raw === '') allPkgs.forEach((pkg) => delete limits[pkg]);
+    savePolicy(d, { dailyLimitsMin: limits }, raw === '' ? '모든 앱의 한도를 풀었습니다' : `${targets.length}개 앱에 '${name}'을(를) 적용했습니다`);
+  });
+  q('#bulkLimit')?.addEventListener('change', () => {
+    const b = $app.querySelector('[data-bulk=apply]');
+    delete b.dataset.confirm;
+    b.textContent = '모든 앱에 적용';
+  });
+  q('#appSearch')?.addEventListener('input', (e) => {
+    state.appSearch = e.target.value;
+    const term = e.target.value.trim().toLowerCase();
+    $app.querySelectorAll('[data-app-row]').forEach((row) => { row.hidden = !!term && !row.dataset.appRow.includes(term); });
   });
 
   // 설정
