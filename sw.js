@@ -2,6 +2,14 @@
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
 
+// 같은 사이트 파일은 항상 서버에 새 버전이 있는지 확인한다 (GitHub Pages의 10분 캐시 때문에 업데이트가 늦게 보이는 것 방지).
+// 바뀌지 않았으면 서버가 304만 돌려주므로 데이터는 거의 쓰지 않는다.
+self.addEventListener('fetch', (event) => {
+  const req = event.request;
+  if (req.method !== 'GET' || new URL(req.url).origin !== self.location.origin) return;
+  event.respondWith(fetch(req.url, { cache: 'no-cache', credentials: 'same-origin' }).catch(() => fetch(req)));
+});
+
 self.addEventListener('push', (event) => {
   let data = {};
   try { data = event.data ? event.data.json() : {}; } catch { data = { body: event.data?.text() }; }
