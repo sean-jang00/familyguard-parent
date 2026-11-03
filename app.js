@@ -1123,7 +1123,6 @@ function tabActivity(d, s) {
   const devEvents = state.events.filter((e) => e.device_id === d.id);
   const cmds = state.commands.filter((c) => c.device_id === d.id).slice(0, 8);
   return `
-    ${patternPlaceholders()}
     ${dataCard(s)}
     <div class="card">
       <div class="card-head"><h2>오늘 앱 사용</h2></div>
@@ -1141,7 +1140,8 @@ function tabActivity(d, s) {
     <div class="card">
       <div class="card-head"><h2>보낸 명령</h2></div>
       ${cmds.map((c) => `<div class="row"><div class="grow"><div>${esc(cmdLabel(c, d))}</div><div class="sub">${esc(ago(c.created_at))}</div></div><span class="sub">${c.done_at ? esc(c.result || '완료') : '대기 중'}</span></div>`).join('')}
-    </div>` : ''}`;
+    </div>` : ''}
+    ${patternPlaceholders()}`;
 }
 
 function tabSettings(d, s) {
