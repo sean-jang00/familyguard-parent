@@ -164,12 +164,11 @@ function subscribe() {
   if (channel || !state.family) return;
   channel = sb.channel(`family-${state.family.id}`)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'devices', filter: `family_id=eq.${state.family.id}` }, refresh)
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'commands' }, refresh)
-    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'events', filter: `family_id=eq.${state.family.id}` }, refresh)
-    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'locations', filter: `family_id=eq.${state.family.id}` }, (e) => {
-      delete state.locations[e.new?.device_id];
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'commands' }, (e) => {
+      if (e.eventType === 'DELETE' || e.new?.type === 'history') return;
       refresh();
     })
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'events', filter: `family_id=eq.${state.family.id}` }, refresh)
     .subscribe();
 }
 
@@ -748,15 +747,44 @@ function locDayLabel(offset) {
 }
 const hhmm = (t) => new Date(t).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false });
 
+// 지난 기록(이동 경로, 사용 패턴)은 서버가 아니라 자녀 폰에 있다.
+// 폰에 'history' 명령으로 요청하고, 응답을 받는 즉시 take_history가 서버에서 지운다.
+const historyInflight = new Map();
+function requestHistory(d, payload) {
+  if (!isOnline(d)) {
+    return Promise.reject(new Error(`폰이 꺼져 있거나 인터넷에 연결되어 있지 않아 기록을 가져올 수 없어요. (마지막 연결 ${ago(d.last_seen)})`));
+  }
+  const key = d.id + JSON.stringify(payload);
+  if (historyInflight.has(key)) return historyInflight.get(key);
+  const p = (async () => {
+    const { data, error } = await sb.from('commands')
+      .insert({ device_id: d.id, type: 'history', payload, created_by: state.session.user.id }).select('id').single();
+    if (error) throw new Error(error.message);
+    const until = Date.now() + 45000;
+    while (Date.now() < until) {
+      await new Promise((r) => setTimeout(r, 1500));
+      const { data: res, error: e2 } = await sb.rpc('take_history', { command_id: data.id });
+      if (e2) throw new Error(e2.message);
+      if (res != null) {
+        if (!String(res).startsWith('{')) throw new Error(`폰이 기록을 보내지 못했어요 (${res})`);
+        return JSON.parse(res);
+      }
+    }
+    throw new Error('폰이 응답하지 않아요. 폰이 잠들어 있으면 늦을 수 있어요. 잠시 후 다시 열어 주세요.');
+  })().finally(() => historyInflight.delete(key));
+  historyInflight.set(key, p);
+  return p;
+}
+
+const localDate = (t) => { const x = new Date(t); return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`; };
+
 /** offset일 전 하루치 위치 (오래된 것 → 최근). 지난 날은 바뀌지 않으므로 계속 캐시한다. */
 async function loadLocations(d, offset = 0) {
   const key = `${d.id}:${offset}`;
   const cached = state.locations[key];
   if (cached && (offset > 0 || Date.now() - cached.at < 60000)) return cached.list;
-  const [from, to] = locDayRange(offset);
-  const list = await run(sb.from('locations').select('lat,lng,accuracy,source,captured_at')
-    .eq('device_id', d.id).gte('captured_at', new Date(from).toISOString()).lt('captured_at', new Date(to).toISOString())
-    .order('captured_at', { ascending: true }).limit(2000));
+  const res = await requestHistory(d, { kind: 'locations', day: localDate(locDayRange(offset)[0]) });
+  const list = res.points || [];
   state.locations[key] = { at: Date.now(), list };
   return list;
 }
@@ -829,7 +857,7 @@ function tabLocation(d, s, p) {
     </div>
 
     <div class="card" style="padding:0;overflow:hidden">
-      <div id="map" class="map"><div class="map-empty">지도를 불러오는 중…</div></div>
+      <div id="map" class="map"><div class="map-empty">폰에서 기록을 가져오는 중…</div></div>
       <div style="padding:16px 18px">
         ${day === 0 ? `
         <div class="row" style="min-height:0;padding:0 0 10px">
@@ -847,13 +875,13 @@ function tabLocation(d, s, p) {
 
     <div class="card">
       <div class="card-head"><h2>${esc(locDayLabel(day))} 타임라인</h2><span class="sub" id="dayDistance"></span></div>
-      <div id="locList"><div class="empty">불러오는 중…</div></div>
+      <div id="locList"><div class="empty">폰에서 기록을 가져오는 중…</div></div>
     </div>
 
     <div class="card">
       <div class="card-head"><h2>위치 기록</h2></div>
       <div class="row">
-        <div class="grow sub">정기적으로 위치를 기록합니다. 날짜별 이동 경로는 ${LOC_DAYS}일 동안 보관돼요.</div>
+        <div class="grow sub">정기적으로 위치를 기록합니다. 지난 이동 경로는 서버가 아니라 <b>따님 폰에 ${LOC_DAYS}일</b> 보관되고, 볼 때마다 폰에서 가져와요.</div>
         <select id="locInterval" aria-label="위치 기록 간격">${LOCATION_INTERVALS.map(([v, t]) => `<option value="${v}" ${v === p.locationIntervalMin ? 'selected' : ''}>${t}</option>`).join('')}</select>
       </div>
       ${s.locationPermission === false ? '<div class="banner warn" style="margin:8px 0 0"><div class="grow"><strong>폰에 위치 권한이 없어요</strong>폰 앱을 최신 버전으로 업데이트해 주세요.</div></div>' : ''}
@@ -871,7 +899,16 @@ async function fillAddresses(items) {
 
 async function showMap(d) {
   const day = state.locDay || 0;
-  const [L, list] = await Promise.all([loadLeaflet(), loadLocations(d, day)]);
+  let L, list;
+  try {
+    [L, list] = await Promise.all([loadLeaflet(), loadLocations(d, day)]);
+  } catch (e) {
+    const msg = esc(e.message || e);
+    const m = document.querySelector('#map .map-empty'); if (m) m.innerHTML = msg;
+    const l = document.getElementById('locList'); if (l) l.innerHTML = `<div class="empty">${msg}</div>`;
+    const sm = document.getElementById('daySummary'); if (sm) sm.textContent = '기록을 가져오지 못했어요';
+    return;
+  }
   const el = document.getElementById('map');
   if (!el || state.tab !== 'location' || state.deviceId !== d.id || (state.locDay || 0) !== day) return;
   el.innerHTML = '';
@@ -1022,8 +1059,8 @@ async function loadUsageDays(d) {
   state.usageDays = state.usageDays || {};
   const c = state.usageDays[d.id];
   if (c && Date.now() - c.at < 120000) return c.list;
-  const list = await run(sb.from('usage_days').select('day_start,data').eq('device_id', d.id)
-    .order('day_start', { ascending: false }).limit(7));
+  const res = await requestHistory(d, { kind: 'usage', days: 7 });
+  const list = res.days || [];
   state.usageDays[d.id] = { at: Date.now(), list };
   return list;
 }
@@ -1064,8 +1101,8 @@ function dataCard(s) {
 
 function patternPlaceholders() {
   return `
-    <div class="card viz" id="hourCard"><div class="card-head"><h2>시간대별 사용</h2></div><div class="empty">불러오는 중…</div></div>
-    <div class="card viz" id="weekCard"><div class="card-head"><h2>최근 7일 패턴</h2></div><div class="empty">불러오는 중…</div></div>`;
+    <div class="card viz" id="hourCard"><div class="card-head"><h2>시간대별 사용</h2></div><div class="empty">폰에서 기록을 가져오는 중…</div></div>
+    <div class="card viz" id="weekCard"><div class="card-head"><h2>최근 7일 패턴</h2></div><div class="empty">폰에서 기록을 가져오는 중…</div></div>`;
 }
 
 // 툴팁: 카드 안 절대 위치 div 하나를 재사용한다
@@ -1218,12 +1255,20 @@ function renderWeek(card, days) {
 }
 
 async function showPatterns(d) {
-  const days = await loadUsageDays(d);
+  let days;
+  try {
+    days = await loadUsageDays(d);
+  } catch (e) {
+    const h = document.getElementById('hourCard');
+    if (h) h.innerHTML = `<div class="card-head"><h2>시간대별 사용</h2></div><div class="empty">${esc(e.message || e)}</div>`;
+    document.getElementById('weekCard')?.remove();
+    return;
+  }
   const hourCard = document.getElementById('hourCard');
   const weekCard = document.getElementById('weekCard');
   if (!hourCard || state.tab !== 'activity' || state.deviceId !== d.id) return;
   if (!days.length) {
-    hourCard.innerHTML = '<div class="card-head"><h2>시간대별 사용</h2></div><div class="empty">아직 기록이 없어요. 폰 앱을 업데이트하면 5분마다 쌓입니다.</div>';
+    hourCard.innerHTML = '<div class="card-head"><h2>시간대별 사용</h2></div><div class="empty">아직 기록이 없어요. 따님 폰에 5분마다 쌓입니다.</div>';
     weekCard.remove();
     return;
   }
