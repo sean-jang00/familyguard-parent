@@ -14,8 +14,9 @@ const $toast = document.getElementById('toast');
 const DEFAULT_POLICY = {
   dailyLimitsMin: {}, bedtimeEnabled: false, bedtimeStartMin: 22 * 60, bedtimeEndMin: 7 * 60,
   alwaysAllowed: [], blockAdb: false, blockedServices: [], familyFilter: true, mode: 'normal', totalDailyLimitMin: null,
-  locationIntervalMin: 10,
+  locationIntervalMin: 10, resetMin: 7 * 60,
 };
+const RESET_TIMES = [[0, '자정 (0시)'], [5 * 60, '새벽 5시'], [6 * 60, '아침 6시'], [7 * 60, '아침 7시'], [8 * 60, '아침 8시']];
 const LOCATION_INTERVALS = [[0, '끄기 (요청할 때만)'], [5, '5분마다'], [10, '10분마다'], [30, '30분마다'], [60, '1시간마다']];
 const APP_LIMITS = [[null, '제한 없음'], [0, '차단'], [30, '30분'], [60, '1시간'], [90, '1시간 30분'], [120, '2시간'], [180, '3시간']];
 const TOTAL_LIMITS = [[null, '제한 없음'], [60, '1시간'], [90, '1시간 30분'], [120, '2시간'], [150, '2시간 30분'], [180, '3시간'], [240, '4시간'], [300, '5시간']];
@@ -808,6 +809,10 @@ function tabLimits(d, s, p) {
         <div class="grow sub">한도를 다 쓰면 '항상 허용' 앱과 전화·문자만 쓸 수 있어요. 5분 전에 아이에게 알려 줍니다.</div>
         <select id="totalLimit" aria-label="하루 전체 사용 한도">${TOTAL_LIMITS.map(([v, t]) => `<option value="${v ?? ''}" ${v === (p.totalDailyLimitMin ?? null) ? 'selected' : ''}>${t}</option>`).join('')}</select>
       </div>
+      <div class="row">
+        <div class="grow"><div class="row-title">초기화 시각</div><div class="sub">하루 한도·앱별 한도·사용시간이 이 시각에 새로 시작돼요.</div></div>
+        <select id="resetMin" aria-label="초기화 시각">${RESET_TIMES.map(([v, t]) => `<option value="${v}" ${v === p.resetMin ? 'selected' : ''}>${t}</option>`).join('')}</select>
+      </div>
     </div>
 
     <div class="card">
@@ -925,6 +930,7 @@ function bindDevice(d, s, p) {
   q('#locInterval')?.addEventListener('change', (e) => savePolicy(d, { locationIntervalMin: Number(e.target.value) }));
 
   // 제한
+  q('#resetMin')?.addEventListener('change', (e) => savePolicy(d, { resetMin: Number(e.target.value) }));
   q('#totalLimit')?.addEventListener('change', (e) => savePolicy(d, { totalDailyLimitMin: e.target.value === '' ? null : Number(e.target.value) }));
   q('#familyFilter')?.addEventListener('change', (e) => savePolicy(d, { familyFilter: e.target.checked }));
   (s.services?.length ? s.services : FALLBACK_SERVICES).forEach((sv) => {
