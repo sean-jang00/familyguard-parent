@@ -14,8 +14,20 @@ const $toast = document.getElementById('toast');
 const DEFAULT_POLICY = {
   dailyLimitsMin: {}, bedtimeEnabled: false, bedtimeStartMin: 22 * 60, bedtimeEndMin: 7 * 60,
   alwaysAllowed: [], blockAdb: false, blockedServices: [], familyFilter: true, mode: 'normal', totalDailyLimitMin: null,
-  locationIntervalMin: 10, resetMin: 7 * 60,
+  locationIntervalMin: 10, resetMin: 7 * 60, bonusMin: 0, bonusUntil: 0,
 };
+// 부모가 준 추가 시간: 다음 초기화 시각까지만 유효 (폰의 Policy.withBonus와 같은 규칙)
+const activeBonus = (p) => (Date.now() < (p.bonusUntil || 0) ? (p.bonusMin || 0) : 0);
+const effTotal = (p) => (p.totalDailyLimitMin == null ? null : p.totalDailyLimitMin + activeBonus(p));
+function nextReset(resetMin) {
+  const t = new Date();
+  const now = t.getTime();
+  t.setHours(Math.floor(resetMin / 60), resetMin % 60, 0, 0);
+  if (t.getTime() > now) t.setDate(t.getDate() - 1);
+  t.setDate(t.getDate() + 1);
+  return t.getTime();
+}
+const resetLabel = (m) => (m === 0 ? '자정' : `${m < 720 ? '아침' : '오후'} ${Math.floor(m / 60) > 12 ? Math.floor(m / 60) - 12 : Math.floor(m / 60)}시${m % 60 ? ` ${m % 60}분` : ''}`);
 const RESET_TIMES = [[0, '자정 (0시)'], [5 * 60, '새벽 5시'], [6 * 60, '아침 6시'], [7 * 60, '아침 7시'], [8 * 60, '아침 8시']];
 const LOCATION_INTERVALS = [[0, '끄기 (요청할 때만)'], [5, '5분마다'], [10, '10분마다'], [30, '30분마다'], [60, '1시간마다']];
 const APP_LIMITS = [[null, '제한 없음'], [0, '차단'], [30, '30분'], [60, '1시간'], [90, '1시간 30분'], [120, '2시간'], [180, '3시간']];
@@ -107,7 +119,7 @@ function ring(pct, size, stroke, color, label) {
 // 하루 사용 링: 한도가 있으면 한도 대비, 없으면 8시간 대비
 function usageRing(d, size, stroke, big) {
   const s = d.state || {};
-  const limit = policyOf(d).totalDailyLimitMin;
+  const limit = effTotal(policyOf(d));
   const used = limit != null ? (s.limitedMs ?? s.screenTimeMs ?? 0) : (s.screenTimeMs ?? 0);
   const pct = limit != null ? used / (limit * 60000) : used / (8 * 3600000);
   const color = limit == null ? 'var(--accent)' : pct >= 1 ? 'var(--danger)' : pct >= 0.8 ? 'var(--warn)' : 'var(--accent)';
@@ -615,8 +627,8 @@ function renderDevice(d) {
         <div style="flex:1;min-width:0">
           <div class="sub">오늘 사용</div>
           <div class="big">${fmtDuration(s.screenTimeMs)}</div>
-          <div class="sub">${p.totalDailyLimitMin != null
-            ? `하루 한도 ${esc(limitName(p.totalDailyLimitMin))} · ${limited >= p.totalDailyLimitMin * 60000 ? '<b style="color:var(--danger)">다 사용함</b>' : `남은 시간 ${fmtDuration(p.totalDailyLimitMin * 60000 - limited)}`}`
+          <div class="sub">${effTotal(p) != null
+            ? `하루 한도 ${esc(limitName(p.totalDailyLimitMin))}${activeBonus(p) ? ` <b style="color:var(--accent)">+${fmtDuration(activeBonus(p) * 60000)}</b>` : ''} · ${limited >= effTotal(p) * 60000 ? '<b style="color:var(--danger)">다 사용함</b>' : `남은 시간 ${fmtDuration(effTotal(p) * 60000 - limited)}`}`
             : '하루 한도 없음'} · 잠금 해제 ${esc(s.unlocks ?? 0)}회</div>
         </div>
       </div>
@@ -640,6 +652,17 @@ function tabOverview(d, s, p) {
   const mode = MODES.find((m) => m.id === p.mode) || MODES[0];
   const devEvents = state.events.filter((e) => e.device_id === d.id).slice(0, 3);
   return `
+    <div class="card">
+      <div class="card-head"><h2>🎁 오늘 추가 시간</h2>${activeBonus(p) ? `<span class="chip ok">+${fmtDuration(activeBonus(p) * 60000)}</span>` : ''}</div>
+      <p class="sub" style="margin-top:-4px">하루 한도와 앱별 한도에 더해집니다. ${esc(resetLabel(p.resetMin))}에 자동으로 사라져요.</p>
+      <div class="btns">
+        <button class="btn soft" data-bonus="15">+15분</button>
+        <button class="btn soft" data-bonus="30">+30분</button>
+        <button class="btn soft" data-bonus="60">+1시간</button>
+      </div>
+      ${activeBonus(p) ? '<button class="text-btn" data-bonus="cancel" style="margin-top:6px">추가 시간 취소</button>' : ''}
+    </div>
+
     <div class="card">
       <div class="card-head"><h2>모드</h2></div>
       <div class="modes">
@@ -920,6 +943,13 @@ function bindDevice(d, s, p) {
   bind('[data-mode-set]', 'click', (e) => {
     const m = e.currentTarget.dataset.modeSet;
     if (m !== p.mode) savePolicy(d, { mode: m }, `${MODES.find((x) => x.id === m).name} 모드로 바꿨습니다`);
+  });
+  bind('[data-bonus]', 'click', (e) => {
+    const v = e.currentTarget.dataset.bonus;
+    if (v === 'cancel') return savePolicy(d, { bonusMin: 0, bonusUntil: 0 }, '추가 시간을 취소했습니다');
+    const m = Number(v);
+    savePolicy(d, { bonusMin: Math.min(activeBonus(p) + m, 720), bonusUntil: nextReset(p.resetMin) },
+      `${fmtDuration(m * 60000)}을 더 줬습니다 (오늘 총 +${fmtDuration((activeBonus(p) + m) * 60000)})`);
   });
   bind('[data-approve]', 'click', (e) => sendCommand(d, 'approve', { pkg: e.currentTarget.dataset.approve }, '승인했습니다'));
   bind('[data-uninstall]', 'click', (e) => sendCommand(d, 'uninstall', { pkg: e.currentTarget.dataset.uninstall }, '삭제 명령을 보냈습니다'));
