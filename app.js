@@ -864,6 +864,53 @@ async function address(lat, lng) {
   return text;
 }
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * '지금 위치 확인': 폰이 지금 위치를 새로 측정해 저장하고, 끝나면 지도를 그 위치로 옮긴다.
+ * (좌표는 명령 결과에 담지 않는다. 폰이 끝나자마자 보고하는 상태의 '마지막 위치'로 받는다)
+ */
+async function locateNow(d) {
+  if (state.locating) return;
+  const requestedAt = Date.now();
+  state.locating = d.id;
+  render();
+  try {
+    const { data, error } = await sb.from('commands')
+      .insert({ device_id: d.id, type: 'locate', payload: {}, created_by: state.session.user.id }).select('id').single();
+    if (error) throw new Error(error.message);
+    let result = null;
+    const until = Date.now() + 75000;
+    while (Date.now() < until) {
+      await sleep(2000);
+      const { data: c } = await sb.from('commands').select('done_at,result').eq('id', data.id).single();
+      if (c?.done_at) { result = c.result || ''; break; }
+    }
+    if (result == null) {
+      throw new Error(isOnline(d)
+        ? '폰이 아직 응답하지 않아요. 폰이 잠들어 있으면 몇 분 걸릴 수 있어요. 응답하면 지도에 표시됩니다.'
+        : '폰이 오프라인이에요. 연결되면 바로 위치를 확인합니다.');
+    }
+    if (!result.startsWith('현재 위치 확인')) throw new Error(result);
+    // 폰은 명령을 끝낸 직후 새 위치가 담긴 상태를 보고한다
+    for (let i = 0; i < 6; i++) {
+      await loadDevices();
+      const nd = state.devices.find((x) => x.id === d.id);
+      if ((nd?.state?.location?.at || 0) >= requestedAt - 60000) break;
+      await sleep(1500);
+    }
+    delete state.locations[`${d.id}:0`];
+    state.locDay = 0;
+    state.mapView = null;
+    toast(`지금 위치를 확인했어요 · ${result.replace('현재 위치 확인 ', '')}`);
+  } catch (e) {
+    toast(e.message || String(e));
+  } finally {
+    state.locating = null;
+    render();
+  }
+}
+
 function tabLocation(d, s, p) {
   const last = s.location;
   const day = state.locDay || 0;
@@ -886,7 +933,7 @@ function tabLocation(d, s, p) {
             <div class="sub">${last ? `${esc(ago(new Date(last.at).toISOString()))} · 오차 약 ${Math.round(last.accuracy)}m` : '폰이 위치를 보내면 여기에 표시됩니다.'}</div>
           </div>
         </div>
-        <button class="btn primary full" id="locate" ${pendingLocate ? 'disabled' : ''}>${pendingLocate ? '폰에 위치를 요청하는 중…' : '📍 지금 위치 확인'}</button>
+        <button class="btn primary full" id="locate" ${pendingLocate || state.locating ? 'disabled' : ''}>${state.locating === d.id ? '📡 지금 위치를 찾는 중… (최대 30초)' : pendingLocate ? '폰에 위치를 요청하는 중…' : '📍 지금 위치 확인'}</button>
         <button class="btn soft full" data-ring="${s.ringing ? 'stop' : 'start'}" style="margin-top:8px">${s.ringing ? '🔕 소리 끄기' : '🔔 소리 울리기 (30초)'}</button>
         <p class="sub" style="margin:8px 0 0">폰이 오래 잠들어 있으면 응답까지 몇 분 걸릴 수 있어요.</p>` : `
         <div class="row-title">${esc(locDayLabel(day))} 이동 경로</div>
@@ -1388,7 +1435,7 @@ function bindDevice(d, s, p) {
   });
 
   // 위치
-  q('#locate')?.addEventListener('click', () => sendCommand(d, 'locate', {}, '위치를 요청했습니다. 폰이 응답하면 지도에 표시됩니다.'));
+  q('#locate')?.addEventListener('click', () => locateNow(d));
   q('#locInterval')?.addEventListener('change', (e) => savePolicy(d, { locationIntervalMin: Number(e.target.value) }));
   bind('[data-locday]', 'click', (e) => { state.locDay = Number(e.currentTarget.dataset.locday); state.mapView = null; render(); });
   q('#locDate')?.addEventListener('change', (e) => {
