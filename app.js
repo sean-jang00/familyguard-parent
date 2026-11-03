@@ -359,6 +359,11 @@ function renderDevice(d) {
     <div class="card">
       <h2>기기 관리</h2>
       <p class="sub">마지막 보고 ${ago(d.last_seen)} · 앱 버전 ${esc(s.appVersion || '-')}</p>
+      <h3>폰의 부모 PIN 변경</h3>
+      <form id="pinForm" class="row" autocomplete="off">
+        <input type="password" name="pin" inputmode="numeric" pattern="[0-9]{4,8}" minlength="4" maxlength="8" placeholder="새 PIN (숫자 4~8자리)" required style="flex:1">
+        <button class="btn">변경</button>
+      </form>
       <div class="btns"><button class="btn danger" id="removeDevice">이 기기 연결 끊기</button></div>
       <p class="sub">연결을 끊어도 폰의 제한은 그대로 남습니다. 완전히 해제하려면 폰의 부모 설정에서 '관리 해제'를 누르세요.</p>
     </div>`;
@@ -389,6 +394,16 @@ function renderDevice(d) {
     const pkg = cb.dataset.allow;
     savePolicy(d, { alwaysAllowed: cb.checked ? [...new Set([...p.alwaysAllowed, pkg])] : p.alwaysAllowed.filter((x) => x !== pkg) });
   });
+  q('#pinForm').onsubmit = async (e) => {
+    e.preventDefault();
+    const pin = new FormData(e.target).get('pin');
+    if (!/^[0-9]{4,8}$/.test(pin)) return toast('숫자 4~8자리로 입력하세요');
+    // PIN 원문은 서버에 보내지 않는다. 폰과 같은 방식(SHA-256(salt + PIN))으로 해시한 값만 보낸다.
+    const salt = [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, '0')).join('');
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(salt + pin));
+    const hash = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+    await sendCommand(d, 'set_pin', { salt, hash }, '폰의 PIN 변경을 요청했습니다');
+  };
   q('#removeDevice').onclick = async () => {
     if (q('#removeDevice').dataset.confirm !== '1') {
       q('#removeDevice').dataset.confirm = '1';
@@ -403,7 +418,7 @@ function renderDevice(d) {
 }
 
 function cmdLabel(c) {
-  const names = { approve: '앱 승인', uninstall: '앱 삭제', lock_now: '화면 끄기' };
+  const names = { approve: '앱 승인', uninstall: '앱 삭제', lock_now: '화면 끄기', set_pin: 'PIN 변경' };
   const d = device();
   const label = c.payload?.pkg ? ((d?.state?.pending || []).find((a) => a.pkg === c.payload.pkg)?.label || c.payload.pkg) : '';
   return `${names[c.type] || c.type}${label ? `: ${label}` : ''}`;
