@@ -275,6 +275,50 @@ input[type=search] { width: 100%; min-height: 44px; padding: 8px 12px; border: 1
 }
 #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
+
+/* ── 차트 (dataviz 기본 팔레트: 범주색 1~5 + 회색 기타, 히트맵은 파랑 단색 진하기) ── */
+:root {
+  --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a; --series-4: #eda100; --series-5: #e87ba4;
+  --series-other: #b4bab7;
+  --seq-0: #edf1f0; --seq-1: #b7d3f6; --seq-2: #6da7ec; --seq-3: #2a78d6; --seq-4: #184f95;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500; --series-5: #d55181;
+    --series-other: #5b6662;
+    --seq-0: #222c2a; --seq-1: #184f95; --seq-2: #256abf; --seq-3: #3987e5; --seq-4: #86b6ef;
+  }
+}
+:root[data-theme="dark"] {
+  --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500; --series-5: #d55181;
+  --series-other: #5b6662;
+  --seq-0: #222c2a; --seq-1: #184f95; --seq-2: #256abf; --seq-3: #3987e5; --seq-4: #86b6ef;
+}
+.viz { position: relative; }
+.viz-svg { width: 100%; height: auto; display: block; margin: 6px 0 4px; touch-action: manipulation; }
+.viz-svg .grid { stroke: var(--line); stroke-width: 1; }
+.viz-svg .axis { fill: var(--muted); font-size: 10px; }
+.viz-svg .hit { fill: transparent; cursor: pointer; }
+.viz-svg rect.cell { cursor: pointer; }
+.viz-svg rect.cell:hover { stroke: var(--text); stroke-width: 1.5; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12.5px; color: var(--muted); margin: 4px 0; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i, .swatch { width: 10px; height: 10px; border-radius: 3px; display: inline-block; flex: none; }
+.heat-legend i { width: 16px; }
+.day-chips { margin: 0 0 4px; }
+.day-chips .chip { cursor: pointer; font: inherit; font-size: 12.5px; font-weight: 600; }
+.day-chips .chip.sel { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+.viz-tip {
+  position: absolute; z-index: 3; pointer-events: none; max-width: 240px;
+  background: var(--surface); color: var(--text); border: 1px solid var(--line); border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.16); padding: 10px 12px; font-size: 13px; line-height: 1.6;
+}
+.viz-tip strong { display: block; margin-bottom: 2px; }
+.viz-tip i { width: 9px; height: 9px; border-radius: 2px; display: inline-block; margin-right: 6px; }
+.viz-tip b { font-weight: 700; }
+.stat-row { display: flex; gap: 18px; flex-wrap: wrap; margin: 2px 0 6px; }
+.stat-big { font-size: 20px; font-weight: 800; letter-spacing: -0.4px; }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before { transition: none !important; animation: none !important; }
 }

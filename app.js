@@ -14,7 +14,7 @@ const $toast = document.getElementById('toast');
 const DEFAULT_POLICY = {
   dailyLimitsMin: {}, bedtimeEnabled: false, bedtimeStartMin: 22 * 60, bedtimeEndMin: 7 * 60,
   alwaysAllowed: [], blockAdb: false, blockedServices: [], familyFilter: true, mode: 'normal', totalDailyLimitMin: null,
-  locationIntervalMin: 10, resetMin: 7 * 60, bonusMin: 0, bonusUntil: 0,
+  locationIntervalMin: 10, resetMin: 7 * 60, bonusMin: 0, bonusUntil: 0, dataCycleDay: 1,
 };
 // 부모가 준 추가 시간: 다음 초기화 시각까지만 유효 (폰의 Policy.withBonus와 같은 규칙)
 const activeBonus = (p) => (Date.now() < (p.bonusUntil || 0) ? (p.bonusMin || 0) : 0);
@@ -500,6 +500,7 @@ function statusChips(d) {
     ${p.mode !== 'normal' ? `<span class="chip ${p.mode === 'locked' ? 'danger' : 'warn'}">${esc(mode?.name)} 모드</span>` : ''}
     ${s.battery != null ? `<span class="chip">🔋 ${esc(s.battery)}%</span>` : ''}
     ${s.location ? `<span class="chip">📍 ${esc(ago(new Date(s.location.at).toISOString()))}</span>` : ''}
+    ${s.mobileData ? `<span class="chip">📶 이번 달 ${esc(fmtBytes(s.mobileData.monthBytes))}</span>` : ''}
     ${s.vpn === false ? '<span class="chip danger">인터넷 필터 꺼짐</span>' : ''}
     ${s.deviceOwner === false ? '<span class="chip danger">관리 권한 없음</span>' : ''}`;
 }
@@ -644,6 +645,7 @@ function renderDevice(d) {
   bind('[data-tab]', 'click', (e) => { state.tab = e.currentTarget.dataset.tab; state.mapView = null; render(); });
   bindDevice(d, s, p);
   if (state.tab === 'location') showMap(d).catch((e) => toast(`지도 표시 실패: ${e.message || e}`));
+  if (state.tab === 'activity') showPatterns(d).catch((e) => toast(`패턴 표시 실패: ${e.message || e}`));
 }
 
 function tabOverview(d, s, p) {
@@ -833,6 +835,10 @@ function tabLimits(d, s, p) {
         <select id="totalLimit" aria-label="하루 전체 사용 한도">${TOTAL_LIMITS.map(([v, t]) => `<option value="${v ?? ''}" ${v === (p.totalDailyLimitMin ?? null) ? 'selected' : ''}>${t}</option>`).join('')}</select>
       </div>
       <div class="row">
+        <div class="grow"><div class="row-title">모바일 데이터 기준일</div><div class="sub">요금제가 갱신되는 날로 맞추면 '이번 달' 사용량이 정확해요.</div></div>
+        <select id="dataCycleDay" aria-label="모바일 데이터 기준일">${Array.from({ length: 28 }, (_, i) => i + 1).map((v) => `<option value="${v}" ${v === p.dataCycleDay ? 'selected' : ''}>매월 ${v}일</option>`).join('')}</select>
+      </div>
+      <div class="row">
         <div class="grow"><div class="row-title">초기화 시각</div><div class="sub">하루 한도·앱별 한도·사용시간이 이 시각에 새로 시작돼요.</div></div>
         <select id="resetMin" aria-label="초기화 시각">${RESET_TIMES.map(([v, t]) => `<option value="${v}" ${v === p.resetMin ? 'selected' : ''}>${t}</option>`).join('')}</select>
       </div>
@@ -882,11 +888,243 @@ function tabLimits(d, s, p) {
     </div>`;
 }
 
+
+// ───────── 사용 패턴 · 모바일 데이터 ─────────
+// 색: dataviz 기본 팔레트의 범주색 1~5번(고정 순서, 검증 통과) + 회색 '기타'. 히트맵은 파랑 한 가지의 진하기.
+
+const SERIES = ['var(--series-1)', 'var(--series-2)', 'var(--series-3)', 'var(--series-4)', 'var(--series-5)'];
+const OTHER = 'var(--series-other)';
+const WEEKDAY = ['일', '월', '화', '수', '목', '금', '토'];
+
+const fmtMinutes = (ms) => (ms > 0 && ms < 60000 ? '1분 미만' : fmtDuration(ms));
+
+function fmtBytes(b) {
+  if (!b) return '0MB';
+  if (b >= 1e9) return `${(b / 1e9).toFixed(b >= 1e10 ? 0 : 1)}GB`;
+  if (b >= 1e6) return `${Math.round(b / 1e6)}MB`;
+  return `${Math.max(1, Math.round(b / 1e3))}KB`;
+}
+
+async function loadUsageDays(d) {
+  state.usageDays = state.usageDays || {};
+  const c = state.usageDays[d.id];
+  if (c && Date.now() - c.at < 120000) return c.list;
+  const list = await run(sb.from('usage_days').select('day_start,data').eq('device_id', d.id)
+    .order('day_start', { ascending: false }).limit(7));
+  state.usageDays[d.id] = { at: Date.now(), list };
+  return list;
+}
+
+function dayLabel(dayStart, i) {
+  if (i === 0) return '오늘';
+  if (i === 1) return '어제';
+  const t = new Date(dayStart);
+  return `${t.getMonth() + 1}/${t.getDate()}(${WEEKDAY[t.getDay()]})`;
+}
+const hourOf = (dayStart, i) => (new Date(dayStart).getHours() + i) % 24;
+const hourName = (h) => `${h}시`;
+
+function dataCard(s) {
+  const m = s.mobileData;
+  if (!m) return '';
+  const since = new Date(m.cycleStart);
+  const apps = m.apps || [];
+  const max = Math.max(...apps.map((a) => a.bytes), 1);
+  return `
+    <div class="card">
+      <div class="card-head"><h2>📶 모바일 데이터</h2><span class="sub">${since.getMonth() + 1}/${since.getDate()}부터</span></div>
+      <div class="stat-row">
+        <div><div class="sub">이번 달</div><div class="stat-big">${fmtBytes(m.monthBytes)}</div></div>
+        <div><div class="sub">오늘</div><div class="stat-big">${fmtBytes(m.todayBytes)}</div></div>
+      </div>
+      <p class="sub" style="margin:6px 0 4px">와이파이는 빼고 모바일 데이터만 셉니다. 기준일은 '제한' 탭에서 바꿀 수 있어요.</p>
+      ${apps.length ? apps.slice(0, 8).map((a) => `
+        <div class="row">
+          ${avatar(a.label, a.pkg)}
+          <div class="grow">
+            <div style="display:flex;gap:8px"><span class="ellipsis" style="flex:1">${esc(a.label)}</span><span class="sub">${fmtBytes(a.bytes)}</span></div>
+            <div class="bar-track"><div class="bar-fill" style="width:${Math.max(2, (a.bytes / max) * 100)}%"></div></div>
+          </div>
+        </div>`).join('') : '<div class="empty">이번 달 모바일 데이터 사용이 거의 없어요.</div>'}
+    </div>`;
+}
+
+function patternPlaceholders() {
+  return `
+    <div class="card viz" id="hourCard"><div class="card-head"><h2>시간대별 사용</h2></div><div class="empty">불러오는 중…</div></div>
+    <div class="card viz" id="weekCard"><div class="card-head"><h2>최근 7일 패턴</h2></div><div class="empty">불러오는 중…</div></div>`;
+}
+
+// 툴팁: 카드 안 절대 위치 div 하나를 재사용한다
+function showTip(card, html, evt) {
+  let tip = card.querySelector('.viz-tip');
+  if (!tip) {
+    tip = document.createElement('div');
+    tip.className = 'viz-tip';
+    card.append(tip);
+  }
+  tip.innerHTML = html;
+  tip.hidden = false;
+  const r = card.getBoundingClientRect();
+  const x = (evt.clientX ?? r.left + r.width / 2) - r.left;
+  const y = (evt.clientY ?? r.top) - r.top;
+  const w = tip.offsetWidth;
+  tip.style.left = `${Math.min(Math.max(8, x - w / 2), r.width - w - 8)}px`;
+  tip.style.top = `${Math.max(8, y - tip.offsetHeight - 14)}px`;
+}
+function hideTip(card) { const t = card.querySelector('.viz-tip'); if (t) t.hidden = true; }
+
+function renderHourChart(card, days, idx) {
+  const day = days[idx];
+  const data = day.data;
+  const hours = data.hours || [];
+  const labels = Object.fromEntries(Object.entries(data.apps || {}).map(([k, v]) => [k, v.label]));
+  // 그날 많이 쓴 앱 5개에 색을 고정 배정 (순위가 아니라 앱에 색이 붙는다)
+  const top = Object.entries(data.apps || {}).sort((a, b) => b[1].ms - a[1].ms).slice(0, 5).map(([k]) => k);
+  const colorOf = (pkg) => (top.includes(pkg) ? SERIES[top.indexOf(pkg)] : OTHER);
+  const stacks = hours.map((h) => {
+    const segs = top.map((pkg) => ({ pkg, ms: h.a?.[pkg] || 0 })).filter((x) => x.ms > 0);
+    const known = segs.reduce((n, x) => n + x.ms, 0);
+    const other = Math.max(0, Object.values(h.a || {}).reduce((n, v) => n + v, 0) - known);
+    if (other > 0) segs.push({ pkg: '__other', ms: other });
+    return segs;
+  });
+  const maxMin = Math.max(60, ...stacks.map((st) => st.reduce((n, x) => n + x.ms, 0) / 60000));
+  const W = 360, H = 190, L = 30, B = 22, T = 8, plotW = W - L - 4, plotH = H - B - T;
+  const band = plotW / 24, bw = Math.max(4, band - 3);
+  const y = (min) => T + plotH - (min / maxMin) * plotH;
+  let svg = `<svg viewBox="0 0 ${W} ${H}" class="viz-svg" role="img" aria-label="${esc(dayLabel(day.day_start, idx))} 시간대별 사용">`;
+  [0, 30, 60].forEach((m) => {
+    svg += `<line x1="${L}" x2="${W - 4}" y1="${y(m)}" y2="${y(m)}" class="grid"/><text x="${L - 6}" y="${y(m) + 4}" class="axis" text-anchor="end">${m}분</text>`;
+  });
+  stacks.forEach((st, i) => {
+    const x = L + i * band + (band - bw) / 2;
+    let acc = 0;
+    st.forEach((seg, j) => {
+      const m = seg.ms / 60000;
+      const y1 = y(acc + m), y0 = y(acc);
+      const h = Math.max(0, y0 - y1 - (j < st.length - 1 ? 2 : 0)); // 조각 사이 2px 간격
+      if (h > 0.3) svg += `<rect x="${x}" y="${y1}" width="${bw}" height="${h}" rx="${j === st.length - 1 ? 2 : 0}" fill="${seg.pkg === '__other' ? OTHER : colorOf(seg.pkg)}"/>`;
+      acc += m;
+    });
+    if (i % 3 === 0) svg += `<text x="${L + i * band + band / 2}" y="${H - 6}" class="axis" text-anchor="middle">${hourOf(day.day_start, i)}시</text>`;
+    svg += `<rect class="hit" data-h="${i}" x="${L + i * band}" y="${T}" width="${band}" height="${plotH}"/>`;
+  });
+  svg += '</svg>';
+
+  const totals = Object.entries(data.apps || {}).sort((a, b) => b[1].ms - a[1].ms);
+  card.innerHTML = `
+    <div class="card-head"><h2>시간대별 사용</h2><span class="sub">${fmtDuration(data.screenMs)}</span></div>
+    <div class="chips day-chips">${days.map((dd, i) => `<button class="chip ${i === idx ? 'sel' : ''}" data-day="${i}">${esc(dayLabel(dd.day_start, i))}</button>`).join('')}</div>
+    ${svg}
+    <div class="legend">
+      ${top.map((pkg, i) => `<span><i style="background:${SERIES[i]}"></i>${esc(labels[pkg] || pkg)}</span>`).join('')}
+      ${stacks.some((st) => st.some((x) => x.pkg === '__other')) ? `<span><i style="background:${OTHER}"></i>기타</span>` : ''}
+    </div>
+    <p class="sub" style="margin:4px 0 8px">막대를 누르면 그 시간에 쓴 앱이 보여요.</p>
+    ${totals.slice(0, 8).map(([pkg, v]) => `<div class="row"><span class="swatch" style="background:${colorOf(pkg)}"></span><div class="grow ellipsis">${esc(v.label)}</div><span class="sub">${fmtMinutes(v.ms)}</span></div>`).join('') || '<div class="empty">이 날은 사용 기록이 없어요.</div>'}`;
+
+  card.querySelectorAll('[data-day]').forEach((b) => b.addEventListener('click', () => {
+    state.patternDay = Number(b.dataset.day);
+    renderHourChart(card, days, state.patternDay);
+  }));
+  const tipFor = (e) => {
+    const i = Number(e.currentTarget.dataset.h);
+    const st = stacks[i];
+    const total = (hours[i]?.s || 0);
+    const rows = st.slice().sort((a, b) => b.ms - a.ms).map((seg) => `<div><i style="background:${seg.pkg === '__other' ? OTHER : colorOf(seg.pkg)}"></i>${esc(seg.pkg === '__other' ? '기타' : labels[seg.pkg] || seg.pkg)} <b>${fmtMinutes(seg.ms)}</b></div>`).join('');
+    showTip(card, `<strong>${hourOf(day.day_start, i)}시~${(hourOf(day.day_start, i) + 1) % 24}시 · ${fmtDuration(total)}</strong>${rows || '<div>사용 없음</div>'}`, e);
+  };
+  card.querySelectorAll('.hit').forEach((r) => {
+    r.addEventListener('pointerenter', tipFor);
+    r.addEventListener('click', tipFor);
+  });
+  card.querySelector('svg').addEventListener('pointerleave', () => hideTip(card));
+}
+
+function renderWeek(card, days) {
+  const list = days.slice().reverse(); // 오래된 날 → 최근
+  const W = 360, L = 58, cell = (W - L - 4) / 24, ch = 18, gap = 2;
+  const bucket = (ms) => { const m = ms / 60000; return m <= 0 ? 0 : m < 10 ? 1 : m < 20 ? 2 : m < 40 ? 3 : 4; };
+  const H = list.length * (ch + gap) + 24;
+  // 시간대별 합계로 '주로 쓰는 시간'과 '늦은 밤 사용'을 계산
+  const byHour = Array(24).fill(0);
+  let night = 0;
+  list.forEach((dd) => (dd.data.hours || []).forEach((h, i) => {
+    const hh = hourOf(dd.day_start, i);
+    byHour[hh] += h.s || 0;
+    if (hh >= 23 || hh < 7) night += h.s || 0;
+  }));
+  let best = 0;
+  for (let h = 0; h < 24; h++) if (byHour[h] + byHour[(h + 1) % 24] > byHour[best] + byHour[(best + 1) % 24]) best = h;
+  const totalWeek = list.reduce((n, dd) => n + (dd.data.screenMs || 0), 0);
+
+  let svg = `<svg viewBox="0 0 ${W} ${H}" class="viz-svg" role="img" aria-label="최근 7일 시간대별 사용 히트맵">`;
+  list.forEach((dd, r) => {
+    const yy = r * (ch + gap);
+    const i0 = days.indexOf(dd);
+    svg += `<text x="${L - 6}" y="${yy + ch - 5}" class="axis" text-anchor="end">${esc(dayLabel(dd.day_start, i0))}</text>`;
+    (dd.data.hours || []).forEach((h, i) => {
+      svg += `<rect class="cell" data-r="${r}" data-h="${i}" x="${L + i * cell}" y="${yy}" width="${cell - gap}" height="${ch}" rx="3" fill="var(--seq-${bucket(h.s || 0)})"/>`;
+    });
+  });
+  const firstStartHour = list.length ? new Date(list[0].day_start).getHours() : 7;
+  for (let i = 0; i < 24; i += 3) svg += `<text x="${L + i * cell + cell / 2}" y="${H - 6}" class="axis" text-anchor="middle">${(firstStartHour + i) % 24}시</text>`;
+  svg += '</svg>';
+
+  const maxDay = Math.max(...list.map((dd) => dd.data.screenMs || 0), 1);
+  card.innerHTML = `
+    <div class="card-head"><h2>최근 7일 패턴</h2></div>
+    <div class="stat-row">
+      <div><div class="sub">하루 평균</div><div class="stat-big">${fmtDuration(totalWeek / Math.max(1, list.length))}</div></div>
+      <div><div class="sub">주로 쓰는 시간</div><div class="stat-big">${totalWeek ? `${best}~${(best + 2) % 24}시` : '-'}</div></div>
+      <div><div class="sub">밤 11시~아침 7시</div><div class="stat-big">${fmtDuration(night)}</div></div>
+    </div>
+    ${svg}
+    <div class="legend heat-legend"><span>적음</span>${[1, 2, 3, 4].map((k) => `<i style="background:var(--seq-${k})"></i>`).join('')}<span>많음 (시간당 40분+)</span></div>
+    <div class="section-label" style="margin:14px 0 6px">하루 총 사용시간</div>
+    ${list.slice().reverse().map((dd) => `
+      <div class="row" style="min-height:40px">
+        <div style="width:64px" class="sub">${esc(dayLabel(dd.day_start, days.indexOf(dd)))}</div>
+        <div class="grow"><div class="bar-track" style="height:10px;margin:0"><div class="bar-fill" style="width:${Math.max(1, ((dd.data.screenMs || 0) / maxDay) * 100)}%"></div></div></div>
+        <div class="sub" style="width:70px;text-align:right">${fmtDuration(dd.data.screenMs)}</div>
+      </div>`).join('')}
+    ${list.length < 7 ? `<p class="sub" style="margin:8px 0 0">기록이 쌓이는 중이에요 (${list.length}일). 일주일이 지나면 패턴이 더 잘 보여요.</p>` : ''}`;
+
+  const tip = (e) => {
+    const r = Number(e.currentTarget.dataset.r), i = Number(e.currentTarget.dataset.h);
+    const dd = list[r];
+    const h = dd.data.hours?.[i] || {};
+    const labels = Object.fromEntries(Object.entries(dd.data.apps || {}).map(([k, v]) => [k, v.label]));
+    const apps = Object.entries(h.a || {}).sort((a, b) => b[1] - a[1]).slice(0, 3)
+      .map(([pkg, ms]) => `<div>${esc(labels[pkg] || pkg)} <b>${fmtDuration(ms)}</b></div>`).join('');
+    showTip(card, `<strong>${esc(dayLabel(dd.day_start, days.indexOf(dd)))} ${hourOf(dd.day_start, i)}시 · ${fmtDuration(h.s || 0)}</strong>${apps}`, e);
+  };
+  card.querySelectorAll('.cell').forEach((c) => { c.addEventListener('pointerenter', tip); c.addEventListener('click', tip); });
+  card.querySelector('svg').addEventListener('pointerleave', () => hideTip(card));
+}
+
+async function showPatterns(d) {
+  const days = await loadUsageDays(d);
+  const hourCard = document.getElementById('hourCard');
+  const weekCard = document.getElementById('weekCard');
+  if (!hourCard || state.tab !== 'activity' || state.deviceId !== d.id) return;
+  if (!days.length) {
+    hourCard.innerHTML = '<div class="card-head"><h2>시간대별 사용</h2></div><div class="empty">아직 기록이 없어요. 폰 앱을 업데이트하면 5분마다 쌓입니다.</div>';
+    weekCard.remove();
+    return;
+  }
+  renderHourChart(hourCard, days, Math.min(state.patternDay || 0, days.length - 1));
+  renderWeek(weekCard, days);
+}
+
 function tabActivity(d, s) {
   const hits = s.hits || [];
   const devEvents = state.events.filter((e) => e.device_id === d.id);
   const cmds = state.commands.filter((c) => c.device_id === d.id).slice(0, 8);
   return `
+    ${patternPlaceholders()}
+    ${dataCard(s)}
     <div class="card">
       <div class="card-head"><h2>오늘 앱 사용</h2></div>
       ${usageList(s.usage || [], 30)}
@@ -960,6 +1198,7 @@ function bindDevice(d, s, p) {
   q('#locInterval')?.addEventListener('change', (e) => savePolicy(d, { locationIntervalMin: Number(e.target.value) }));
 
   // 제한
+  q('#dataCycleDay')?.addEventListener('change', (e) => savePolicy(d, { dataCycleDay: Number(e.target.value) }));
   q('#resetMin')?.addEventListener('change', (e) => savePolicy(d, { resetMin: Number(e.target.value) }));
   q('#totalLimit')?.addEventListener('change', (e) => savePolicy(d, { totalDailyLimitMin: e.target.value === '' ? null : Number(e.target.value) }));
   q('#familyFilter')?.addEventListener('change', (e) => savePolicy(d, { familyFilter: e.target.checked }));
