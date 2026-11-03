@@ -14,7 +14,9 @@ const $toast = document.getElementById('toast');
 const DEFAULT_POLICY = {
   dailyLimitsMin: {}, bedtimeEnabled: false, bedtimeStartMin: 22 * 60, bedtimeEndMin: 7 * 60,
   alwaysAllowed: [], blockAdb: false, blockedServices: [], familyFilter: true, mode: 'normal', totalDailyLimitMin: null,
+  locationIntervalMin: 10,
 };
+const LOCATION_INTERVALS = [[0, '끄기 (요청할 때만)'], [5, '5분마다'], [10, '10분마다'], [30, '30분마다'], [60, '1시간마다']];
 const APP_LIMITS = [[null, '제한 없음'], [0, '차단'], [30, '30분'], [60, '1시간'], [90, '1시간 30분'], [120, '2시간'], [180, '3시간']];
 const TOTAL_LIMITS = [[null, '제한 없음'], [60, '1시간'], [90, '1시간 30분'], [120, '2시간'], [150, '2시간 30분'], [180, '3시간'], [240, '4시간'], [300, '5시간']];
 const FALLBACK_SERVICES = [
@@ -41,7 +43,9 @@ const ONLINE_MS = 3 * 60 * 1000;
 const state = {
   session: null, family: null, devices: [], commands: [], events: [],
   view: 'home', deviceId: null, tab: 'overview', authMode: 'login', code: null, push: 'unknown',
+  locations: {}, mapView: null,
 };
+let map = null;
 let channel = null;
 
 // ───────── 유틸 ─────────
@@ -149,6 +153,10 @@ function subscribe() {
     .on('postgres_changes', { event: '*', schema: 'public', table: 'devices', filter: `family_id=eq.${state.family.id}` }, refresh)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'commands' }, refresh)
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'events', filter: `family_id=eq.${state.family.id}` }, refresh)
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'locations', filter: `family_id=eq.${state.family.id}` }, (e) => {
+      delete state.locations[e.new?.device_id];
+      refresh();
+    })
     .subscribe();
 }
 
@@ -336,6 +344,7 @@ function statusChips(d) {
     <span class="chip ${isOnline(d) ? 'ok' : ''}"><span class="dot ${isOnline(d) ? 'on' : ''}"></span>${isOnline(d) ? '온라인' : esc(ago(d.last_seen))}</span>
     ${p.mode !== 'normal' ? `<span class="chip ${p.mode === 'locked' ? 'danger' : 'warn'}">${esc(mode?.name)} 모드</span>` : ''}
     ${s.battery != null ? `<span class="chip">🔋 ${esc(s.battery)}%</span>` : ''}
+    ${s.location ? `<span class="chip">📍 ${esc(ago(new Date(s.location.at).toISOString()))}</span>` : ''}
     ${s.vpn === false ? '<span class="chip danger">인터넷 필터 꺼짐</span>' : ''}
     ${s.deviceOwner === false ? '<span class="chip danger">관리 권한 없음</span>' : ''}`;
 }
@@ -448,7 +457,7 @@ function renderDevice(d) {
   $title.textContent = d.name;
   $subtitle.textContent = isOnline(d) ? '온라인' : `마지막 연결 ${ago(d.last_seen)}`;
   const pending = s.pending || [];
-  const tabs = [['overview', '개요'], ['limits', '제한'], ['activity', '기록'], ['settings', '설정']];
+  const tabs = [['overview', '개요'], ['location', '위치'], ['limits', '제한'], ['activity', '기록'], ['settings', '설정']];
   const limited = s.limitedMs ?? 0;
 
   const hero = `
@@ -469,10 +478,12 @@ function renderDevice(d) {
       ${tabs.map(([id, name]) => `<button role="tab" data-tab="${id}" aria-selected="${state.tab === id}">${name}${id === 'overview' && pending.length ? ` <span class="badge">${pending.length}</span>` : ''}</button>`).join('')}
     </div>`;
 
-  const body = { overview: tabOverview, limits: tabLimits, activity: tabActivity, settings: tabSettings }[state.tab](d, s, p);
+  const body = { overview: tabOverview, location: tabLocation, limits: tabLimits, activity: tabActivity, settings: tabSettings }[state.tab](d, s, p);
+  saveMapView();
   $app.innerHTML = hero + body;
-  bind('[data-tab]', 'click', (e) => { state.tab = e.currentTarget.dataset.tab; render(); });
+  bind('[data-tab]', 'click', (e) => { state.tab = e.currentTarget.dataset.tab; state.mapView = null; render(); });
   bindDevice(d, s, p);
+  if (state.tab === 'location') showMap(d).catch((e) => toast(`지도 표시 실패: ${e.message || e}`));
 }
 
 function tabOverview(d, s, p) {
@@ -518,6 +529,124 @@ function tabOverview(d, s, p) {
 
     <div class="btns"><button class="btn" id="lockNow">화면 끄기</button></div>
     <p class="sub center">화면만 끕니다. 계속 막으려면 위에서 '잠금' 모드를 쓰세요.</p>`;
+}
+
+// ───────── 위치 ─────────
+
+function saveMapView() {
+  if (!map) return;
+  state.mapView = { deviceId: state.deviceId, center: map.getCenter(), zoom: map.getZoom() };
+  map.remove();
+  map = null;
+}
+
+function loadLeaflet() {
+  if (window.L) return Promise.resolve(window.L);
+  if (loadLeaflet.p) return loadLeaflet.p;
+  const css = document.createElement('link');
+  css.rel = 'stylesheet';
+  css.href = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css';
+  document.head.append(css);
+  loadLeaflet.p = new Promise((resolve, reject) => {
+    const js = document.createElement('script');
+    js.src = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js';
+    js.onload = () => resolve(window.L);
+    js.onerror = () => { loadLeaflet.p = null; reject(new Error('지도 라이브러리를 불러오지 못했습니다')); };
+    document.head.append(js);
+  });
+  return loadLeaflet.p;
+}
+
+async function loadLocations(d) {
+  const cached = state.locations[d.id];
+  if (cached && Date.now() - cached.at < 60000) return cached.list;
+  const since = new Date(Date.now() - 24 * 3600000).toISOString();
+  const list = await run(sb.from('locations').select('lat,lng,accuracy,source,captured_at')
+    .eq('device_id', d.id).gte('captured_at', since).order('captured_at', { ascending: false }).limit(300));
+  state.locations[d.id] = { at: Date.now(), list };
+  return list;
+}
+
+const addrCache = new Map();
+async function address(lat, lng) {
+  const key = `${lat.toFixed(4)},${lng.toFixed(4)}`;
+  if (addrCache.has(key)) return addrCache.get(key);
+  // 오픈스트리트맵 Nominatim (가끔만 호출, 결과는 캐시)
+  const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=18&accept-language=ko&lat=${lat}&lon=${lng}`);
+  const j = await r.json();
+  const a = j.address || {};
+  const text = [a.city || a.county || a.state, a.borough || a.city_district || a.suburb, a.quarter || a.neighbourhood || a.village, a.road, a.amenity || a.building]
+    .filter(Boolean).filter((v, i, arr) => arr.indexOf(v) === i).join(' ') || j.display_name || '';
+  addrCache.set(key, text);
+  return text;
+}
+
+function tabLocation(d, s, p) {
+  const last = s.location;
+  const pendingLocate = state.commands.some((c) => c.device_id === d.id && c.type === 'locate' && !c.done_at);
+  return `
+    <div class="card" style="padding:0;overflow:hidden">
+      <div id="map" class="map"><div class="map-empty">지도를 불러오는 중…</div></div>
+      <div style="padding:16px 18px">
+        <div class="row" style="min-height:0;padding:0 0 10px">
+          <div class="grow">
+            <div class="row-title" id="addr">${last ? '주소 확인 중…' : '아직 위치 기록이 없어요'}</div>
+            <div class="sub">${last ? `${esc(ago(new Date(last.at).toISOString()))} · 오차 약 ${Math.round(last.accuracy)}m` : '폰이 위치를 보내면 여기에 표시됩니다.'}</div>
+          </div>
+        </div>
+        <button class="btn primary full" id="locate" ${pendingLocate ? 'disabled' : ''}>${pendingLocate ? '폰에 위치를 요청하는 중…' : '📍 지금 위치 확인'}</button>
+        <p class="sub" style="margin:8px 0 0">폰이 오래 잠들어 있으면 응답까지 몇 분 걸릴 수 있어요.</p>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h2>위치 기록</h2></div>
+      <div class="row">
+        <div class="grow sub">정기적으로 위치를 기록합니다. 7일이 지난 기록은 자동으로 지워져요.</div>
+        <select id="locInterval" aria-label="위치 기록 간격">${LOCATION_INTERVALS.map(([v, t]) => `<option value="${v}" ${v === p.locationIntervalMin ? 'selected' : ''}>${t}</option>`).join('')}</select>
+      </div>
+      ${s.locationPermission === false ? '<div class="banner warn" style="margin:8px 0 0"><div class="grow"><strong>폰에 위치 권한이 없어요</strong>폰 앱을 최신 버전으로 업데이트해 주세요.</div></div>' : ''}
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h2>최근 24시간</h2></div>
+      <div id="locList"><div class="empty">불러오는 중…</div></div>
+    </div>`;
+}
+
+async function showMap(d) {
+  const [L, list] = await Promise.all([loadLeaflet(), loadLocations(d)]);
+  const el = document.getElementById('map');
+  if (!el || state.tab !== 'location' || state.deviceId !== d.id) return;
+  el.innerHTML = '';
+  const listEl = document.getElementById('locList');
+  if (listEl) {
+    listEl.innerHTML = list.length
+      ? list.slice(0, 15).map((l) => `<div class="row"><span class="loc-dot ${l.source === 'request' ? 'req' : ''}"></span><div class="grow">${esc(new Date(l.captured_at).toLocaleTimeString('ko-KR', { hour: 'numeric', minute: '2-digit' }))}${l.source === 'request' ? ' <span class="sub">(요청)</span>' : ''}</div><span class="sub">오차 ${Math.round(l.accuracy ?? 0)}m</span></div>`).join('')
+      : '<div class="empty">최근 24시간 기록이 없어요.</div>';
+  }
+  const latest = list[0] || (d.state?.location ? { lat: d.state.location.lat, lng: d.state.location.lng, accuracy: d.state.location.accuracy } : null);
+  map = L.map(el, { zoomControl: true, attributionControl: true });
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19, attribution: '&copy; OpenStreetMap',
+  }).addTo(map);
+  if (!latest) {
+    map.setView([36.5, 127.8], 7);
+    return;
+  }
+  const path = list.slice().reverse().map((l) => [l.lat, l.lng]);
+  if (path.length > 1) L.polyline(path, { color: '#3a7bf0', weight: 4, opacity: 0.55 }).addTo(map);
+  list.slice(1, 60).forEach((l) => L.circleMarker([l.lat, l.lng], { radius: 4, color: '#3a7bf0', weight: 1, fillOpacity: 0.6 }).addTo(map));
+  L.circle([latest.lat, latest.lng], { radius: latest.accuracy || 50, color: '#3a7bf0', weight: 1, fillOpacity: 0.12 }).addTo(map);
+  L.marker([latest.lat, latest.lng], {
+    icon: L.divIcon({ className: '', html: '<div class="me-pin"><img src="icon-192.png" alt=""></div>', iconSize: [44, 44], iconAnchor: [22, 22] }),
+  }).addTo(map);
+  const mv = state.mapView;
+  if (mv && mv.deviceId === d.id) map.setView(mv.center, mv.zoom);
+  else map.setView([latest.lat, latest.lng], 16);
+  address(latest.lat, latest.lng)
+    .then((t) => { const a = document.getElementById('addr'); if (a) a.textContent = t || '주소를 찾지 못했어요'; })
+    .catch(() => { const a = document.getElementById('addr'); if (a) a.textContent = '주소를 찾지 못했어요'; });
 }
 
 function tabLimits(d, s, p) {
@@ -629,6 +758,10 @@ function bindDevice(d, s, p) {
   bind('[data-uninstall]', 'click', (e) => sendCommand(d, 'uninstall', { pkg: e.currentTarget.dataset.uninstall }, '삭제 명령을 보냈습니다'));
   q('#lockNow')?.addEventListener('click', () => sendCommand(d, 'lock_now', {}, '화면을 껐습니다'));
 
+  // 위치
+  q('#locate')?.addEventListener('click', () => sendCommand(d, 'locate', {}, '위치를 요청했습니다. 폰이 응답하면 지도에 표시됩니다.'));
+  q('#locInterval')?.addEventListener('change', (e) => savePolicy(d, { locationIntervalMin: Number(e.target.value) }));
+
   // 제한
   q('#totalLimit')?.addEventListener('change', (e) => savePolicy(d, { totalDailyLimitMin: e.target.value === '' ? null : Number(e.target.value) }));
   q('#familyFilter')?.addEventListener('change', (e) => savePolicy(d, { familyFilter: e.target.checked }));
@@ -678,7 +811,7 @@ function bindDevice(d, s, p) {
 }
 
 function cmdLabel(c, d) {
-  const names = { approve: '앱 승인', uninstall: '앱 삭제', lock_now: '화면 끄기', set_pin: 'PIN 변경' };
+  const names = { approve: '앱 승인', uninstall: '앱 삭제', lock_now: '화면 끄기', set_pin: 'PIN 변경', locate: '위치 요청' };
   const label = c.payload?.pkg ? ((d?.state?.pending || []).find((a) => a.pkg === c.payload.pkg)?.label || c.payload.pkg) : '';
   return `${names[c.type] || c.type}${label ? `: ${label}` : ''}`;
 }
