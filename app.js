@@ -699,8 +699,13 @@ function tabOverview(d, s, p) {
       ${devEvents.map(eventRow).join('')}
     </div>` : ''}
 
-    <div class="btns"><button class="btn" id="lockNow">화면 끄기</button></div>
-    <p class="sub center">화면만 끕니다. 계속 막으려면 위에서 '잠금' 모드를 쓰세요.</p>`;
+    <div class="btns">
+      ${s.ringing
+        ? '<button class="btn danger" data-ring="stop">🔕 소리 끄기</button>'
+        : '<button class="btn soft" data-ring="start">🔔 소리 울리기</button>'}
+      <button class="btn" id="lockNow">화면 끄기</button>
+    </div>
+    <p class="sub center">소리 울리기: 무음이어도 30초 동안 "삐빅" 소리가 나요. 화면 끄기: 화면만 꺼요 (계속 막으려면 '잠금' 모드).</p>`;
 }
 
 // ───────── 위치 ─────────
@@ -783,10 +788,25 @@ async function loadLocations(d, offset = 0) {
   const key = `${d.id}:${offset}`;
   const cached = state.locations[key];
   if (cached && (offset > 0 || Date.now() - cached.at < 60000)) return cached.list;
-  const res = await requestHistory(d, { kind: 'locations', day: localDate(locDayRange(offset)[0]) });
-  const list = res.points || [];
+  let list;
+  try {
+    const res = await requestHistory(d, { kind: 'locations', day: localDate(locDayRange(offset)[0]) });
+    list = res.points || [];
+  } catch (e) {
+    if (offset !== 0) throw e;
+    list = await loadRecentFromServer(d);
+    if (!list.length) throw e;
+  }
   state.locations[key] = { at: Date.now(), list };
   return list;
+}
+
+/** 비상용: 서버에 남아 있는 마지막 12시간 위치 (폰이 꺼져도 남아 있다) */
+async function loadRecentFromServer(d) {
+  const rows = await run(sb.from('recent_locations').select('lat,lng,accuracy,source,captured_at')
+    .eq('device_id', d.id).order('captured_at', { ascending: true }).limit(500));
+  rows.fromServer = true;
+  return rows;
 }
 
 function meters(a, b) {
@@ -867,6 +887,7 @@ function tabLocation(d, s, p) {
           </div>
         </div>
         <button class="btn primary full" id="locate" ${pendingLocate ? 'disabled' : ''}>${pendingLocate ? '폰에 위치를 요청하는 중…' : '📍 지금 위치 확인'}</button>
+        <button class="btn soft full" data-ring="${s.ringing ? 'stop' : 'start'}" style="margin-top:8px">${s.ringing ? '🔕 소리 끄기' : '🔔 소리 울리기 (30초)'}</button>
         <p class="sub" style="margin:8px 0 0">폰이 오래 잠들어 있으면 응답까지 몇 분 걸릴 수 있어요.</p>` : `
         <div class="row-title">${esc(locDayLabel(day))} 이동 경로</div>
         <div class="sub" id="daySummary">불러오는 중…</div>`}
@@ -913,6 +934,7 @@ async function showMap(d) {
   if (!el || state.tab !== 'location' || state.deviceId !== d.id || (state.locDay || 0) !== day) return;
   el.innerHTML = '';
   const { pts, stays, distance } = analyzeDay(list);
+  const fromServer = !!list.fromServer;
 
   // 타임라인
   const listEl = document.getElementById('locList');
@@ -922,6 +944,7 @@ async function showMap(d) {
   if (sumEl) sumEl.textContent = pts.length ? `기록 ${pts.length}개 · 머문 곳 ${stays.length}곳 · 이동 약 ${fmtKm(distance)}` : '이 날은 위치 기록이 없어요.';
   if (listEl) {
     if (!pts.length) listEl.innerHTML = '<div class="empty">이 날은 위치 기록이 없어요.</div>';
+    else if (fromServer && !stays.length) listEl.innerHTML = '';
     else if (!stays.length) listEl.innerHTML = `<div class="empty">10분 넘게 머문 곳이 없어요. (${hhmm(pts[0].t)} ~ ${hhmm(pts[pts.length - 1].t)} 기록)</div>`;
     else {
       const lastPt = pts[pts.length - 1];
@@ -938,6 +961,15 @@ async function showMap(d) {
           </div>`;
       }).join('');
     }
+  }
+
+  if (fromServer && listEl) {
+    const lastT = pts.length ? pts[pts.length - 1].t : null;
+    listEl.insertAdjacentHTML('afterbegin', `<div class="banner warn" style="margin:0 0 10px"><div class="grow">
+      <strong>폰이 꺼져 있거나 연결이 끊겼어요</strong>
+      서버에 남아 있는 <b>마지막 12시간</b> 기록을 보여드려요.${lastT ? ` 마지막 위치: ${esc(new Date(lastT).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }))} (${esc(ago(new Date(lastT).toISOString()))})` : ''}
+    </div></div>`);
+    if (stays.length === 0 && pts.length) listEl.insertAdjacentHTML('beforeend', `<div class="empty">${hhmm(pts[0].t)} ~ ${hhmm(pts[pts.length - 1].t)} 기록 ${pts.length}개</div>`);
   }
 
   // 지도
@@ -1350,6 +1382,10 @@ function bindDevice(d, s, p) {
   bind('[data-approve]', 'click', (e) => sendCommand(d, 'approve', { pkg: e.currentTarget.dataset.approve }, '승인했습니다'));
   bind('[data-uninstall]', 'click', (e) => sendCommand(d, 'uninstall', { pkg: e.currentTarget.dataset.uninstall }, '삭제 명령을 보냈습니다'));
   q('#lockNow')?.addEventListener('click', () => sendCommand(d, 'lock_now', {}, '화면을 껐습니다'));
+  bind('[data-ring]', 'click', (e) => {
+    if (e.currentTarget.dataset.ring === 'stop') sendCommand(d, 'ring_stop', {}, '소리를 끄라고 보냈습니다');
+    else sendCommand(d, 'ring', { seconds: 30 }, isOnline(d) ? '폰에서 소리가 울립니다 (30초)' : '폰이 오프라인이라 연결되면 울립니다');
+  });
 
   // 위치
   q('#locate')?.addEventListener('click', () => sendCommand(d, 'locate', {}, '위치를 요청했습니다. 폰이 응답하면 지도에 표시됩니다.'));
@@ -1447,7 +1483,7 @@ function bindDevice(d, s, p) {
 }
 
 function cmdLabel(c, d) {
-  const names = { approve: '앱 승인', uninstall: '앱 삭제', lock_now: '화면 끄기', set_pin: 'PIN 변경', locate: '위치 요청' };
+  const names = { approve: '앱 승인', uninstall: '앱 삭제', lock_now: '화면 끄기', set_pin: 'PIN 변경', locate: '위치 요청', ring: '소리 울리기', ring_stop: '소리 끄기' };
   const label = c.payload?.pkg ? ((d?.state?.pending || []).find((a) => a.pkg === c.payload.pkg)?.label || c.payload.pkg) : '';
   return `${names[c.type] || c.type}${label ? `: ${label}` : ''}`;
 }
