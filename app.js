@@ -258,6 +258,146 @@ function pushBanner(compact) {
   </div>`;
 }
 
+// ───────── 앱 잠금 PIN ─────────
+// 이 휴대폰에서만 쓰는 4자리 PIN. 서버로 보내지 않고 PBKDF2 해시만 이 브라우저에 저장한다.
+// 앱을 열 때와 1분 넘게 다른 앱에 있다가 돌아올 때 잠긴다. 5번 틀리면 로그아웃된다.
+
+const PIN_LEN = 4;
+const LOCK_AFTER_MS = 60 * 1000;
+const MAX_FAILS = 5;
+const lock = { step: null, entry: '', first: '', msg: '', shake: false, hiddenAt: 0, busy: false };
+
+const lockKey = () => `fg_lock_${state.session?.user?.id}`;
+function lockConfig() {
+  try { return JSON.parse(localStorage.getItem(lockKey()) || 'null'); } catch { return null; }
+}
+function saveLockConfig(c) {
+  try {
+    if (c) localStorage.setItem(lockKey(), JSON.stringify(c)); else localStorage.removeItem(lockKey());
+  } catch { toast('이 브라우저에 저장할 수 없습니다'); }
+}
+const toHex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+const fromHex = (h) => Uint8Array.from(h.match(/../g), (x) => parseInt(x, 16));
+
+async function pinHash(pin, salt, iterations) {
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(pin), 'PBKDF2', false, ['deriveBits']);
+  return toHex(await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: fromHex(salt), iterations }, key, 256));
+}
+
+function startLock(step) {
+  Object.assign(lock, { step, entry: '', first: '', msg: '', shake: false });
+  render();
+}
+
+async function signOutAll(message) {
+  saveLockConfig(null);
+  lock.step = null;
+  await sb.auth.signOut();
+  if (message) toast(message);
+}
+
+async function pinDigit(d) {
+  if (lock.busy || !lock.step) return;
+  if (d === 'del') lock.entry = lock.entry.slice(0, -1);
+  else if (lock.entry.length < PIN_LEN) lock.entry += d;
+  lock.shake = false;
+  if (lock.entry.length < PIN_LEN) return render();
+  render();
+  lock.busy = true;
+  try {
+    const pin = lock.entry;
+    lock.entry = '';
+    if (lock.step === 'unlock') {
+      const c = lockConfig();
+      if (!c) { lock.step = null; return; }
+      if (await pinHash(pin, c.salt, c.iterations) === c.hash) {
+        saveLockConfig({ ...c, fails: 0 });
+        lock.step = null;
+        return;
+      }
+      const fails = (c.fails || 0) + 1;
+      if (fails >= MAX_FAILS) {
+        await signOutAll('PIN을 5번 틀려서 로그아웃했습니다. 이메일로 다시 로그인하세요.');
+        return;
+      }
+      saveLockConfig({ ...c, fails });
+      Object.assign(lock, { msg: `PIN이 틀렸어요 (${fails}/${MAX_FAILS})`, shake: true });
+    } else if (lock.step === 'set1') {
+      Object.assign(lock, { step: 'set2', first: pin, msg: '' });
+    } else if (lock.step === 'set2') {
+      if (pin !== lock.first) {
+        Object.assign(lock, { step: 'set1', first: '', msg: 'PIN이 서로 달라요. 처음부터 다시 입력하세요.', shake: true });
+      } else {
+        const salt = toHex(crypto.getRandomValues(new Uint8Array(16)));
+        const iterations = 150000;
+        saveLockConfig({ salt, iterations, hash: await pinHash(pin, salt, iterations), fails: 0 });
+        lock.step = null;
+        toast('앱 잠금 PIN을 설정했습니다');
+      }
+    }
+  } finally {
+    lock.busy = false;
+    render();
+  }
+}
+
+function renderLock() {
+  $title.textContent = '';
+  $logout.hidden = true;
+  $back.hidden = true;
+  const title = { unlock: 'PIN을 입력하세요', set1: '새 PIN 4자리를 입력하세요', set2: '한 번 더 입력하세요' }[lock.step];
+  const keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9', lock.step === 'unlock' ? '' : 'cancel', '0', 'del'];
+  $app.innerHTML = `
+    <div class="lock-screen">
+      <img class="lock-icon" src="icon-192.png" alt="">
+      <div class="lock-title">${title}</div>
+      <div class="pin-dots ${lock.shake ? 'shake' : ''}" aria-label="${lock.entry.length}자리 입력됨">
+        ${Array.from({ length: PIN_LEN }, (_, i) => `<span class="${i < lock.entry.length ? 'on' : ''}"></span>`).join('')}
+      </div>
+      <div class="lock-msg">${esc(lock.msg)}</div>
+      <div class="keypad">
+        ${keys.map((k) => k === ''
+          ? '<span></span>'
+          : `<button data-key="${k}" aria-label="${k === 'del' ? '지우기' : k === 'cancel' ? '취소' : k}">${k === 'del' ? '⌫' : k === 'cancel' ? '<small>취소</small>' : k}</button>`).join('')}
+      </div>
+      ${lock.step === 'unlock' ? '<button class="text-btn" data-act="forgot">PIN을 잊었어요</button>' : ''}
+    </div>`;
+  bind('[data-key]', 'click', (e) => {
+    const k = e.currentTarget.dataset.key;
+    if (k === 'cancel') { lock.step = null; return render(); }
+    pinDigit(k);
+  });
+  bind('[data-act=forgot]', 'click', () => signOutAll('로그아웃했습니다. 이메일로 로그인한 뒤 PIN을 다시 설정하세요.'));
+}
+
+document.addEventListener('keydown', (e) => {
+  if (!lock.step) return;
+  if (/^[0-9]$/.test(e.key)) pinDigit(e.key);
+  else if (e.key === 'Backspace') pinDigit('del');
+});
+
+function deviceSettingsCard() {
+  const c = lockConfig();
+  const pushRow = {
+    on: '<div class="row"><div class="grow"><div class="row-title">알림 받는 중</div><div class="sub">부모 PIN 사용, PIN 5회 틀림, 하루 한도 도달</div></div><button class="btn small" data-act="push-off">끄기</button></div>',
+    off: '<div class="row"><div class="grow"><div class="row-title">알림 받기</div><div class="sub">부모 PIN 사용, PIN 5회 틀림, 하루 한도 도달</div></div><button class="btn primary small" data-act="push-on">켜기</button></div>',
+  }[state.push] || '';
+  return `
+    <div class="section-label">이 폰 설정</div>
+    <div class="card">
+      <div class="row">
+        <div class="grow">
+          <div class="row-title">앱 잠금 PIN</div>
+          <div class="sub">${c ? '켜짐 · 앱을 열 때 PIN 4자리를 입력합니다' : '꺼짐 · 다른 사람이 이 폰으로 설정을 바꾸지 못하게 막아요'}</div>
+        </div>
+        ${c
+          ? '<button class="btn small" data-act="lock-change">변경</button><button class="btn small danger" data-act="lock-off">끄기</button>'
+          : '<button class="btn primary small" data-act="lock-on">켜기</button>'}
+      </div>
+      ${pushRow}
+    </div>`;
+}
+
 // ───────── 화면 ─────────
 
 function render() {
@@ -265,6 +405,7 @@ function render() {
   $back.hidden = state.view === 'home' || !state.session;
   $subtitle.textContent = '';
   if (!state.session) return renderAuth();
+  if (lock.step) return renderLock();
   if (!state.family) return renderNoFamily();
   if (state.view === 'device' && device()) return renderDevice(device());
   state.view = 'home';
@@ -300,6 +441,7 @@ function renderAuth() {
     e.preventDefault();
     const f = new FormData(e.target);
     const creds = { email: f.get('email').trim(), password: f.get('password') };
+    lock.justLoggedIn = true;
     const { error } = signup ? await sb.auth.signUp(creds) : await sb.auth.signInWithPassword(creds);
     if (error) toast(error.message.includes('Invalid login') ? '이메일 또는 비밀번호가 틀렸습니다' : error.message);
   };
@@ -384,7 +526,12 @@ function renderHome() {
     <div class="btns">
       <button class="btn primary" data-act="pair">자녀 폰 연결</button>
       <button class="btn" data-act="invite">보호자 초대</button>
-    </div>`;
+    </div>
+    ${deviceSettingsCard()}`;
+  bind('[data-act=lock-on]', 'click', () => startLock('set1'));
+  bind('[data-act=lock-change]', 'click', () => startLock('set1'));
+  bind('[data-act=lock-off]', 'click', () => { saveLockConfig(null); toast('앱 잠금을 껐습니다'); render(); });
+  bind('[data-act=push-off]', 'click', disablePush);
   bind('[data-device]', 'click', (e) => openDevice(e.currentTarget.dataset.device));
   bind('[data-device]', 'keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDevice(e.currentTarget.dataset.device); } });
   bind('[data-act=pair]', 'click', () => makeCode('device'));
@@ -819,17 +966,21 @@ function cmdLabel(c, d) {
 // ───────── 시작 ─────────
 
 $back.onclick = () => { state.view = 'home'; render(); scrollTo(0, 0); };
-$logout.onclick = async () => { await sb.auth.signOut(); };
+$logout.onclick = () => signOutAll();
 
 sb.auth.onAuthStateChange((event, session) => {
   const changedUser = state.session?.user?.id !== session?.user?.id;
   state.session = session;
   if (!session) {
     state.family = null; state.devices = []; state.events = [];
+    lock.step = null;
     if (channel) { sb.removeChannel(channel); channel = null; }
     return render();
   }
   if (changedUser) {
+    // 이미 로그인된 상태로 앱을 열면 PIN부터 묻는다 (방금 이메일로 로그인한 경우는 제외).
+    if (lockConfig() && !lock.justLoggedIn) Object.assign(lock, { step: 'unlock', entry: '', msg: '' });
+    lock.justLoggedIn = false;
     // 콜백 안에서 바로 Supabase를 호출하면 교착될 수 있어서 다음 틱으로 미룬다.
     setTimeout(async () => {
       try { await Promise.all([loadFamily(), checkPush()]); subscribe(); } catch { /* run()이 이미 알림 */ }
@@ -842,4 +993,12 @@ if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catc
 
 // 실시간 연결이 끊긴 경우를 대비한 주기적 새로고침
 setInterval(() => { if (state.family && document.visibilityState === 'visible') refresh(); }, 30000);
-document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') refresh(); });
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') {
+    lock.hiddenAt = Date.now();
+    return;
+  }
+  // 1분 넘게 다른 앱에 있다가 돌아오면 다시 잠근다.
+  if (state.session && lockConfig() && !lock.step && lock.hiddenAt && Date.now() - lock.hiddenAt > LOCK_AFTER_MS) startLock('unlock');
+  refresh();
+});

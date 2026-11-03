@@ -224,6 +224,26 @@ input[type=checkbox].check { width: 22px; height: 22px; accent-color: var(--acce
 .loc-dot.req { opacity: 1; box-shadow: 0 0 0 3px color-mix(in srgb, #3a7bf0 25%, transparent); }
 .tabs button { font-size: 14px; }
 
+/* ── 앱 잠금 PIN ── */
+.lock-screen { display: flex; flex-direction: column; align-items: center; padding: 6vh 0 24px; }
+.lock-icon { width: 64px; height: 64px; border-radius: 18px; box-shadow: var(--shadow); }
+.lock-title { margin: 18px 0 20px; font-size: 19px; font-weight: 800; letter-spacing: -0.3px; }
+.pin-dots { display: flex; gap: 18px; height: 18px; }
+.pin-dots span { width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--muted); transition: .15s; }
+.pin-dots span.on { background: var(--accent); border-color: var(--accent); transform: scale(1.1); }
+.pin-dots.shake { animation: shake .4s; }
+@keyframes shake { 20%, 60% { transform: translateX(-10px); } 40%, 80% { transform: translateX(10px); } }
+.lock-msg { min-height: 22px; margin: 14px 0 10px; color: var(--danger); font-size: 14px; font-weight: 600; text-align: center; }
+.keypad { display: grid; grid-template-columns: repeat(3, 76px); gap: 16px 26px; margin-bottom: 18px; }
+.keypad button {
+  width: 76px; height: 76px; border-radius: 50%; border: 0;
+  background: var(--surface); box-shadow: var(--shadow); color: var(--text);
+  font-size: 28px; font-weight: 600; cursor: pointer;
+}
+.keypad button:active { background: var(--accent-soft); transform: scale(.95); }
+.keypad button small { font-size: 15px; color: var(--muted); }
+.keypad button[data-key=del] { background: none; box-shadow: none; font-size: 24px; color: var(--muted); }
+
 /* ── 연결 코드 ── */
 .code { font-size: 42px; font-weight: 800; letter-spacing: 10px; text-align: center; margin: 10px 0 4px; font-variant-numeric: tabular-nums; color: var(--accent); }
 
