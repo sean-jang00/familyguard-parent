@@ -708,7 +708,7 @@ function tabOverview(d, s, p) {
 
 function saveMapView() {
   if (!map) return;
-  state.mapView = { deviceId: state.deviceId, center: map.getCenter(), zoom: map.getZoom() };
+  state.mapView = { deviceId: state.deviceId, day: state.locDay || 0, center: map.getCenter(), zoom: map.getZoom() };
   map.remove();
   map = null;
 }
@@ -730,14 +730,76 @@ function loadLeaflet() {
   return loadLeaflet.p;
 }
 
-async function loadLocations(d) {
-  const cached = state.locations[d.id];
-  if (cached && Date.now() - cached.at < 60000) return cached.list;
-  const since = new Date(Date.now() - 24 * 3600000).toISOString();
+const DAY_MS = 24 * 3600000;
+const LOC_DAYS = 35;
+
+// offset일 전의 [자정, 다음 자정)
+function locDayRange(offset) {
+  const t = new Date();
+  t.setHours(0, 0, 0, 0);
+  t.setDate(t.getDate() - offset);
+  return [t.getTime(), t.getTime() + DAY_MS];
+}
+function locDayLabel(offset) {
+  if (offset === 0) return '오늘';
+  if (offset === 1) return '어제';
+  const t = new Date(locDayRange(offset)[0]);
+  return `${t.getMonth() + 1}/${t.getDate()}(${'일월화수목금토'[t.getDay()]})`;
+}
+const hhmm = (t) => new Date(t).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false });
+
+/** offset일 전 하루치 위치 (오래된 것 → 최근). 지난 날은 바뀌지 않으므로 계속 캐시한다. */
+async function loadLocations(d, offset = 0) {
+  const key = `${d.id}:${offset}`;
+  const cached = state.locations[key];
+  if (cached && (offset > 0 || Date.now() - cached.at < 60000)) return cached.list;
+  const [from, to] = locDayRange(offset);
   const list = await run(sb.from('locations').select('lat,lng,accuracy,source,captured_at')
-    .eq('device_id', d.id).gte('captured_at', since).order('captured_at', { ascending: false }).limit(300));
-  state.locations[d.id] = { at: Date.now(), list };
+    .eq('device_id', d.id).gte('captured_at', new Date(from).toISOString()).lt('captured_at', new Date(to).toISOString())
+    .order('captured_at', { ascending: true }).limit(2000));
+  state.locations[key] = { at: Date.now(), list };
   return list;
+}
+
+function meters(a, b) {
+  const R = 6371000, rad = Math.PI / 180;
+  const dLat = (b.lat - a.lat) * rad, dLng = (b.lng - a.lng) * rad;
+  const x = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(x));
+}
+const fmtKm = (m) => (m >= 1000 ? `${(m / 1000).toFixed(1)}km` : `${Math.round(m / 10) * 10}m`);
+
+/**
+ * 하루 위치에서 '머문 곳'과 이동 거리를 뽑는다.
+ * 머문 곳: 약 150m(또는 그 지점의 오차) 안에 연속으로 있었고 10분 이상 + 기록 2개 이상.
+ * 이동 거리: 오차보다 크게 움직인 구간만 더한다 (제자리 오차로 거리가 쌓이지 않게).
+ */
+function analyzeDay(points) {
+  const pts = points.filter((p) => (p.accuracy ?? 0) <= 300).map((p) => ({ ...p, t: new Date(p.captured_at).getTime() }));
+  const clusters = [];
+  let cur = null;
+  for (const p of pts) {
+    if (cur && meters(cur, p) <= Math.max(150, p.accuracy || 0)) {
+      cur.n++;
+      cur.lat += (p.lat - cur.lat) / cur.n;
+      cur.lng += (p.lng - cur.lng) / cur.n;
+      cur.end = p.t;
+    } else {
+      if (cur) clusters.push(cur);
+      cur = { lat: p.lat, lng: p.lng, start: p.t, end: p.t, n: 1 };
+    }
+  }
+  if (cur) clusters.push(cur);
+  const stays = clusters.filter((c) => c.n >= 2 && c.end - c.start >= 10 * 60000);
+  let distance = 0;
+  let prev = null;
+  for (const p of pts) {
+    if (prev) {
+      const m = meters(prev, p);
+      if (m > Math.max(prev.accuracy || 0, p.accuracy || 0, 50)) { distance += m; prev = p; }
+    } else prev = p;
+  }
+  return { pts, stays, distance };
 }
 
 const addrCache = new Map();
@@ -756,11 +818,20 @@ async function address(lat, lng) {
 
 function tabLocation(d, s, p) {
   const last = s.location;
+  const day = state.locDay || 0;
   const pendingLocate = state.commands.some((c) => c.device_id === d.id && c.type === 'locate' && !c.done_at);
+  const [minDate, maxDate] = [locDayRange(LOC_DAYS - 1)[0], locDayRange(0)[0]].map((t) => new Date(t - new Date(t).getTimezoneOffset() * 60000).toISOString().slice(0, 10));
+  const selDate = new Date(locDayRange(day)[0] - new Date(locDayRange(day)[0]).getTimezoneOffset() * 60000).toISOString().slice(0, 10);
   return `
+    <div class="chips day-chips" style="margin:0 0 10px">
+      ${Array.from({ length: 7 }, (_, i) => `<button class="chip ${i === day ? 'sel' : ''}" data-locday="${i}">${esc(locDayLabel(i))}</button>`).join('')}
+      <input type="date" id="locDate" value="${selDate}" min="${minDate}" max="${maxDate}" aria-label="날짜 선택" class="chip date-chip ${day >= 7 ? 'sel' : ''}">
+    </div>
+
     <div class="card" style="padding:0;overflow:hidden">
       <div id="map" class="map"><div class="map-empty">지도를 불러오는 중…</div></div>
       <div style="padding:16px 18px">
+        ${day === 0 ? `
         <div class="row" style="min-height:0;padding:0 0 10px">
           <div class="grow">
             <div class="row-title" id="addr">${last ? '주소 확인 중…' : '아직 위치 기록이 없어요'}</div>
@@ -768,58 +839,100 @@ function tabLocation(d, s, p) {
           </div>
         </div>
         <button class="btn primary full" id="locate" ${pendingLocate ? 'disabled' : ''}>${pendingLocate ? '폰에 위치를 요청하는 중…' : '📍 지금 위치 확인'}</button>
-        <p class="sub" style="margin:8px 0 0">폰이 오래 잠들어 있으면 응답까지 몇 분 걸릴 수 있어요.</p>
+        <p class="sub" style="margin:8px 0 0">폰이 오래 잠들어 있으면 응답까지 몇 분 걸릴 수 있어요.</p>` : `
+        <div class="row-title">${esc(locDayLabel(day))} 이동 경로</div>
+        <div class="sub" id="daySummary">불러오는 중…</div>`}
       </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h2>${esc(locDayLabel(day))} 타임라인</h2><span class="sub" id="dayDistance"></span></div>
+      <div id="locList"><div class="empty">불러오는 중…</div></div>
     </div>
 
     <div class="card">
       <div class="card-head"><h2>위치 기록</h2></div>
       <div class="row">
-        <div class="grow sub">정기적으로 위치를 기록합니다. 7일이 지난 기록은 자동으로 지워져요.</div>
+        <div class="grow sub">정기적으로 위치를 기록합니다. 날짜별 이동 경로는 ${LOC_DAYS}일 동안 보관돼요.</div>
         <select id="locInterval" aria-label="위치 기록 간격">${LOCATION_INTERVALS.map(([v, t]) => `<option value="${v}" ${v === p.locationIntervalMin ? 'selected' : ''}>${t}</option>`).join('')}</select>
       </div>
       ${s.locationPermission === false ? '<div class="banner warn" style="margin:8px 0 0"><div class="grow"><strong>폰에 위치 권한이 없어요</strong>폰 앱을 최신 버전으로 업데이트해 주세요.</div></div>' : ''}
-    </div>
-
-    <div class="card">
-      <div class="card-head"><h2>최근 24시간</h2></div>
-      <div id="locList"><div class="empty">불러오는 중…</div></div>
     </div>`;
 }
 
-async function showMap(d) {
-  const [L, list] = await Promise.all([loadLeaflet(), loadLocations(d)]);
-  const el = document.getElementById('map');
-  if (!el || state.tab !== 'location' || state.deviceId !== d.id) return;
-  el.innerHTML = '';
-  const listEl = document.getElementById('locList');
-  if (listEl) {
-    listEl.innerHTML = list.length
-      ? list.slice(0, 15).map((l) => `<div class="row"><span class="loc-dot ${l.source === 'request' ? 'req' : ''}"></span><div class="grow">${esc(new Date(l.captured_at).toLocaleTimeString('ko-KR', { hour: 'numeric', minute: '2-digit' }))}${l.source === 'request' ? ' <span class="sub">(요청)</span>' : ''}</div><span class="sub">오차 ${Math.round(l.accuracy ?? 0)}m</span></div>`).join('')
-      : '<div class="empty">최근 24시간 기록이 없어요.</div>';
+// 주소는 차례대로 1초 간격으로 묻는다 (Nominatim 사용 정책)
+async function fillAddresses(items) {
+  for (const { el, lat, lng } of items) {
+    if (!el.isConnected) return;
+    try { el.textContent = (await address(lat, lng)) || '주소를 찾지 못했어요'; } catch { el.textContent = '주소를 찾지 못했어요'; }
+    await new Promise((r) => setTimeout(r, 1100));
   }
-  const latest = list[0] || (d.state?.location ? { lat: d.state.location.lat, lng: d.state.location.lng, accuracy: d.state.location.accuracy } : null);
+}
+
+async function showMap(d) {
+  const day = state.locDay || 0;
+  const [L, list] = await Promise.all([loadLeaflet(), loadLocations(d, day)]);
+  const el = document.getElementById('map');
+  if (!el || state.tab !== 'location' || state.deviceId !== d.id || (state.locDay || 0) !== day) return;
+  el.innerHTML = '';
+  const { pts, stays, distance } = analyzeDay(list);
+
+  // 타임라인
+  const listEl = document.getElementById('locList');
+  const distEl = document.getElementById('dayDistance');
+  if (distEl) distEl.textContent = pts.length ? `이동 거리 약 ${fmtKm(distance)}` : '';
+  const sumEl = document.getElementById('daySummary');
+  if (sumEl) sumEl.textContent = pts.length ? `기록 ${pts.length}개 · 머문 곳 ${stays.length}곳 · 이동 약 ${fmtKm(distance)}` : '이 날은 위치 기록이 없어요.';
+  if (listEl) {
+    if (!pts.length) listEl.innerHTML = '<div class="empty">이 날은 위치 기록이 없어요.</div>';
+    else if (!stays.length) listEl.innerHTML = `<div class="empty">10분 넘게 머문 곳이 없어요. (${hhmm(pts[0].t)} ~ ${hhmm(pts[pts.length - 1].t)} 기록)</div>`;
+    else {
+      const lastPt = pts[pts.length - 1];
+      listEl.innerHTML = stays.map((st, i) => {
+        const ongoing = day === 0 && i === stays.length - 1 && st.end === lastPt.t && Date.now() - st.end < 30 * 60000;
+        const move = i > 0 ? `<div class="move-row">↓ 이동 약 ${fmtKm(meters(stays[i - 1], st))}</div>` : '';
+        return `${move}
+          <div class="row stay">
+            <span class="stay-no">${i + 1}</span>
+            <div class="grow">
+              <div class="row-title">${hhmm(st.start)} ~ ${ongoing ? '지금' : hhmm(st.end)} <span class="sub">(${fmtDuration((ongoing ? Date.now() : st.end) - st.start)})</span></div>
+              <div class="sub ellipsis" data-stay="${i}">주소 확인 중…</div>
+            </div>
+          </div>`;
+      }).join('');
+    }
+  }
+
+  // 지도
+  const latest = pts[pts.length - 1] || (day === 0 && d.state?.location ? { lat: d.state.location.lat, lng: d.state.location.lng, accuracy: d.state.location.accuracy } : null);
   map = L.map(el, { zoomControl: true, attributionControl: true });
-  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 19, attribution: '&copy; OpenStreetMap',
-  }).addTo(map);
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap' }).addTo(map);
   if (!latest) {
     map.setView([36.5, 127.8], 7);
     return;
   }
-  const path = list.slice().reverse().map((l) => [l.lat, l.lng]);
-  if (path.length > 1) L.polyline(path, { color: '#3a7bf0', weight: 4, opacity: 0.55 }).addTo(map);
-  list.slice(1, 60).forEach((l) => L.circleMarker([l.lat, l.lng], { radius: 4, color: '#3a7bf0', weight: 1, fillOpacity: 0.6 }).addTo(map));
-  L.circle([latest.lat, latest.lng], { radius: latest.accuracy || 50, color: '#3a7bf0', weight: 1, fillOpacity: 0.12 }).addTo(map);
-  L.marker([latest.lat, latest.lng], {
-    icon: L.divIcon({ className: '', html: '<div class="me-pin"><img src="icon-192.png" alt=""></div>', iconSize: [44, 44], iconAnchor: [22, 22] }),
-  }).addTo(map);
+  const path = pts.map((l) => [l.lat, l.lng]);
+  if (path.length > 1) L.polyline(path, { color: '#3a7bf0', weight: 4, opacity: 0.6 }).addTo(map);
+  pts.forEach((l) => L.circleMarker([l.lat, l.lng], { radius: 3, color: '#3a7bf0', weight: 1, fillOpacity: 0.5 }).addTo(map));
+  stays.forEach((st, i) => L.marker([st.lat, st.lng], {
+    icon: L.divIcon({ className: '', html: `<div class="stay-pin">${i + 1}</div>`, iconSize: [26, 26], iconAnchor: [13, 13] }),
+  }).bindTooltip(`${hhmm(st.start)} ~ ${hhmm(st.end)}`).addTo(map));
+  if (day === 0) {
+    L.circle([latest.lat, latest.lng], { radius: latest.accuracy || 50, color: '#3a7bf0', weight: 1, fillOpacity: 0.12 }).addTo(map);
+    L.marker([latest.lat, latest.lng], {
+      icon: L.divIcon({ className: '', html: '<div class="me-pin"><img src="icon-192.png" alt=""></div>', iconSize: [44, 44], iconAnchor: [22, 22] }),
+    }).addTo(map);
+  }
   const mv = state.mapView;
-  if (mv && mv.deviceId === d.id) map.setView(mv.center, mv.zoom);
+  if (mv && mv.deviceId === d.id && mv.day === day) map.setView(mv.center, mv.zoom);
+  else if (day === 0) map.setView([latest.lat, latest.lng], 16);
+  else if (path.length > 1) map.fitBounds(L.latLngBounds(path), { padding: [30, 30], maxZoom: 16 });
   else map.setView([latest.lat, latest.lng], 16);
-  address(latest.lat, latest.lng)
-    .then((t) => { const a = document.getElementById('addr'); if (a) a.textContent = t || '주소를 찾지 못했어요'; })
-    .catch(() => { const a = document.getElementById('addr'); if (a) a.textContent = '주소를 찾지 못했어요'; });
+
+  const items = [];
+  if (day === 0) { const a = document.getElementById('addr'); if (a) items.push({ el: a, lat: latest.lat, lng: latest.lng }); }
+  stays.forEach((st, i) => { const e = document.querySelector(`[data-stay="${i}"]`); if (e) items.push({ el: e, lat: st.lat, lng: st.lng }); });
+  fillAddresses(items);
 }
 
 function tabLimits(d, s, p) {
@@ -1196,6 +1309,15 @@ function bindDevice(d, s, p) {
   // 위치
   q('#locate')?.addEventListener('click', () => sendCommand(d, 'locate', {}, '위치를 요청했습니다. 폰이 응답하면 지도에 표시됩니다.'));
   q('#locInterval')?.addEventListener('change', (e) => savePolicy(d, { locationIntervalMin: Number(e.target.value) }));
+  bind('[data-locday]', 'click', (e) => { state.locDay = Number(e.currentTarget.dataset.locday); state.mapView = null; render(); });
+  q('#locDate')?.addEventListener('change', (e) => {
+    if (!e.target.value) return;
+    const [y, m, dd] = e.target.value.split('-').map(Number);
+    const offset = Math.round((locDayRange(0)[0] - new Date(y, m - 1, dd).getTime()) / DAY_MS);
+    state.locDay = Math.min(Math.max(0, offset), LOC_DAYS - 1);
+    state.mapView = null;
+    render();
+  });
 
   // 제한
   q('#dataCycleDay')?.addEventListener('change', (e) => savePolicy(d, { dataCycleDay: Number(e.target.value) }));

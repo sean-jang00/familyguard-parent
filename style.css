@@ -322,3 +322,15 @@ input[type=search] { width: 100%; min-height: 44px; padding: 8px 12px; border: 1
 @media (prefers-reduced-motion: reduce) {
   *, *::before { transition: none !important; animation: none !important; }
 }
+
+/* ── 일별 이동 경로 ── */
+.date-chip { min-height: 30px; padding: 2px 8px; font-size: 12.5px; color: var(--text); background: var(--surface-2); width: auto; }
+.date-chip.sel { border-color: var(--accent); }
+.stay-no, .stay-pin {
+  display: grid; place-items: center; flex: none;
+  width: 26px; height: 26px; border-radius: 50%;
+  background: #3a7bf0; color: #fff; font-weight: 800; font-size: 13px;
+}
+.stay-pin { border: 2px solid #fff; box-shadow: 0 1px 6px rgba(0,0,0,.35); }
+.move-row { padding: 2px 0 2px 38px; font-size: 12.5px; color: var(--muted); }
+.row.stay + .move-row { border-top: 0; }
