@@ -272,14 +272,14 @@ function pushBanner(compact) {
 
 // ───────── 앱 잠금 PIN ─────────
 // 이 휴대폰에서만 쓰는 4자리 PIN. 서버로 보내지 않고 PBKDF2 해시만 이 브라우저에 저장한다.
-// 앱을 열 때와 1분 넘게 다른 앱에 있다가 돌아올 때 잠긴다. 5번 틀리면 로그아웃된다.
+// 앱을 열 때와 3분 넘게 다른 앱에 있다가 돌아올 때 잠긴다 (3분 안의 새로고침은 그대로 둔다). 5번 틀리면 로그아웃된다.
 
 const PIN_LEN = 4;
-const LOCK_AFTER_MS = 60 * 1000;
+const LOCK_AFTER_MS = 3 * 60 * 1000; // 마지막으로 쓴 뒤 3분 안이면 PIN을 다시 묻지 않는다
 const MAX_FAILS = 5;
 const lock = { step: null, entry: '', first: '', msg: '', shake: false, hiddenAt: 0, busy: false };
 
-// 잠금이 풀린 채로 쓰고 있었던 마지막 시각. 새로고침(화면 당기기)이나 잠깐 껐다 켠 경우에는 PIN을 다시 묻지 않기 위함.
+// 잠금이 풀린 채로 쓰고 있었던 마지막 시각. 새로고침(화면 당기기)이나 잠깐 껐다 켠 경우 3분 안에는 PIN을 다시 묻지 않는다.
 // 잠겨 있는 동안에는 기록하지 않으므로, 잠금 화면에서 새로고침해도 풀리지 않는다.
 const ACTIVE_KEY = 'fg_last_active';
 function markActive() {
@@ -290,6 +290,7 @@ function recentlyActive() {
   try { return Date.now() - Number(localStorage.getItem(ACTIVE_KEY) || 0) < LOCK_AFTER_MS; } catch { return false; }
 }
 setInterval(() => { if (document.visibilityState === 'visible') markActive(); }, 5000);
+addEventListener('pagehide', markActive);
 
 const lockKey = () => `fg_lock_${state.session?.user?.id}`;
 function lockConfig() {
@@ -1585,7 +1586,7 @@ document.addEventListener('visibilitychange', () => {
     markActive();
     return;
   }
-  // 1분 넘게 다른 앱에 있다가 돌아오면 다시 잠근다.
+  // 3분 넘게 다른 앱에 있다가 돌아오면 다시 잠근다.
   if (state.session && lockConfig() && !lock.step && lock.hiddenAt && Date.now() - lock.hiddenAt > LOCK_AFTER_MS) startLock('unlock');
   refresh();
 });
