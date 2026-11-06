@@ -38,6 +38,8 @@
 
 * { box-sizing: border-box; }
 html, body { margin: 0; }
+/* 화면을 아래로 당겨도 새로고침되지 않게 (앱이 자동으로 갱신된다) */
+html, body { overscroll-behavior-y: none; }
 body {
   background: var(--bg);
   color: var(--text);

@@ -279,6 +279,18 @@ const LOCK_AFTER_MS = 60 * 1000;
 const MAX_FAILS = 5;
 const lock = { step: null, entry: '', first: '', msg: '', shake: false, hiddenAt: 0, busy: false };
 
+// 잠금이 풀린 채로 쓰고 있었던 마지막 시각. 새로고침(화면 당기기)이나 잠깐 껐다 켠 경우에는 PIN을 다시 묻지 않기 위함.
+// 잠겨 있는 동안에는 기록하지 않으므로, 잠금 화면에서 새로고침해도 풀리지 않는다.
+const ACTIVE_KEY = 'fg_last_active';
+function markActive() {
+  if (!state.session || lock.step) return;
+  try { localStorage.setItem(ACTIVE_KEY, String(Date.now())); } catch { /* 저장 불가 시 매번 PIN */ }
+}
+function recentlyActive() {
+  try { return Date.now() - Number(localStorage.getItem(ACTIVE_KEY) || 0) < LOCK_AFTER_MS; } catch { return false; }
+}
+setInterval(() => { if (document.visibilityState === 'visible') markActive(); }, 5000);
+
 const lockKey = () => `fg_lock_${state.session?.user?.id}`;
 function lockConfig() {
   try { return JSON.parse(localStorage.getItem(lockKey()) || 'null'); } catch { return null; }
@@ -303,6 +315,7 @@ function startLock(step) {
 
 async function signOutAll(message) {
   saveLockConfig(null);
+  try { localStorage.removeItem(ACTIVE_KEY); } catch { /* 무시 */ }
   lock.step = null;
   await sb.auth.signOut();
   if (message) toast(message);
@@ -325,6 +338,7 @@ async function pinDigit(d) {
       if (await pinHash(pin, c.salt, c.iterations) === c.hash) {
         saveLockConfig({ ...c, fails: 0 });
         lock.step = null;
+        markActive();
         return;
       }
       const fails = (c.fails || 0) + 1;
@@ -1551,7 +1565,7 @@ sb.auth.onAuthStateChange((event, session) => {
   }
   if (changedUser) {
     // 이미 로그인된 상태로 앱을 열면 PIN부터 묻는다 (방금 이메일로 로그인한 경우는 제외).
-    if (lockConfig() && !lock.justLoggedIn) Object.assign(lock, { step: 'unlock', entry: '', msg: '' });
+    if (lockConfig() && !lock.justLoggedIn && !recentlyActive()) Object.assign(lock, { step: 'unlock', entry: '', msg: '' });
     lock.justLoggedIn = false;
     // 콜백 안에서 바로 Supabase를 호출하면 교착될 수 있어서 다음 틱으로 미룬다.
     setTimeout(async () => {
@@ -1568,6 +1582,7 @@ setInterval(() => { if (state.family && document.visibilityState === 'visible') 
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') {
     lock.hiddenAt = Date.now();
+    markActive();
     return;
   }
   // 1분 넘게 다른 앱에 있다가 돌아오면 다시 잠근다.
