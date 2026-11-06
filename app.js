@@ -505,12 +505,23 @@ function renderNoFamily() {
   };
 }
 
+/** 폰 화면 상태: 켜짐(사용 중) / 잠금화면 / 꺼짐 + 그 상태가 된 지 얼마나 됐는지 */
+function screenChip(d) {
+  const sc = d.state?.screen;
+  if (!sc || !sc.state || !isOnline(d)) return '';
+  const dur = sc.since ? Date.now() - sc.since : 0;
+  const forTime = dur < 60000 ? '방금' : `${fmtDuration(dur)}째`;
+  const [icon, name, tone] = { on: ['📱', '화면 켜짐', 'ok'], locked: ['🔒', '잠금화면', ''], off: ['⚫', '화면 꺼짐', ''] }[sc.state] || ['', sc.state, ''];
+  return `<span class="chip ${tone}" title="폰 화면 상태">${icon} ${name} · ${forTime}</span>`;
+}
+
 function statusChips(d) {
   const s = d.state || {};
   const p = policyOf(d);
   const mode = MODES.find((m) => m.id === p.mode);
   return `
     <span class="chip ${isOnline(d) ? 'ok' : ''}"><span class="dot ${isOnline(d) ? 'on' : ''}"></span>${isOnline(d) ? '온라인' : esc(ago(d.last_seen))}</span>
+    ${screenChip(d)}
     ${p.mode !== 'normal' ? `<span class="chip ${p.mode === 'locked' ? 'danger' : 'warn'}">${esc(mode?.name)} 모드</span>` : ''}
     ${s.battery != null ? `<span class="chip">🔋 ${esc(s.battery)}%</span>` : ''}
     ${s.location ? `<span class="chip">📍 ${esc(ago(new Date(s.location.at).toISOString()))}</span>` : ''}
