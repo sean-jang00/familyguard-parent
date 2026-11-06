@@ -549,13 +549,17 @@ function renderHome() {
     ${codeCard()}
     ${recent.length ? `
       <div class="section-label">최근 알림</div>
-      <div class="card">${recent.map(eventRow).join('')}</div>` : ''}
+      <div class="card">
+        ${recent.map(eventRow).join('')}
+        <div style="text-align:right;margin-top:6px"><button class="link" data-clear-events="all">알림 비우기</button></div>
+      </div>` : ''}
     <div class="section-label">가족 관리</div>
     <div class="btns">
       <button class="btn primary" data-act="pair">자녀 폰 연결</button>
       <button class="btn" data-act="invite">보호자 초대</button>
     </div>
     ${deviceSettingsCard()}`;
+  bind('[data-clear-events]', 'click', (e) => clearEvents(e.currentTarget, null));
   bind('[data-act=lock-on]', 'click', () => startLock('set1'));
   bind('[data-act=lock-change]', 'click', () => startLock('set1'));
   bind('[data-act=lock-off]', 'click', () => { saveLockConfig(null); toast('앱 잠금을 껐습니다'); render(); });
@@ -592,6 +596,21 @@ function codeCard() {
 async function makeCode(kind) {
   const code = await run(sb.rpc('create_pairing_code', { fid: state.family.id, code_kind: kind }));
   state.code = { code, kind, expires: Date.now() + 10 * 60 * 1000 };
+  render();
+}
+
+/** 알림 기록 비우기. d가 있으면 그 기기만, 없으면 가족 전체. 실수 방지로 두 번 눌러야 지운다. */
+async function clearEvents(btn, d) {
+  if (btn.dataset.confirm !== '1') {
+    btn.dataset.confirm = '1';
+    btn.textContent = '한 번 더 누르면 비워요';
+    setTimeout(() => { if (btn.isConnected) { delete btn.dataset.confirm; btn.textContent = d ? '비우기' : '알림 비우기'; } }, 4000);
+    return;
+  }
+  let q = sb.from('events').delete().eq('family_id', state.family.id);
+  if (d) q = q.eq('device_id', d.id);
+  await run(q, '알림을 비웠습니다');
+  state.events = d ? state.events.filter((e) => e.device_id !== d.id) : [];
   render();
 }
 
@@ -710,7 +729,7 @@ function tabOverview(d, s, p) {
 
     ${devEvents.length ? `
     <div class="card">
-      <div class="card-head"><h2>최근 알림</h2><button class="link" data-tab="activity">전체 보기</button></div>
+      <div class="card-head"><h2>최근 알림</h2><button class="link" data-clear-events="device">비우기</button><button class="link" data-tab="activity">전체 보기</button></div>
       ${devEvents.map(eventRow).join('')}
     </div>` : ''}
 
@@ -1380,7 +1399,7 @@ function tabActivity(d, s) {
       ${usageList(s.usage || [], 30)}
     </div>
     <div class="card">
-      <div class="card-head"><h2>알림 기록</h2></div>
+      <div class="card-head"><h2>알림 기록</h2>${devEvents.length ? '<button class="link" data-clear-events="device">비우기</button>' : ''}</div>
       ${devEvents.length ? devEvents.map(eventRow).join('') : '<div class="empty">아직 알림이 없습니다.</div>'}
     </div>
     <div class="card">
@@ -1434,6 +1453,7 @@ function bindDevice(d, s, p) {
     const m = e.currentTarget.dataset.modeSet;
     if (m !== p.mode) savePolicy(d, { mode: m }, `${MODES.find((x) => x.id === m).name} 모드로 바꿨습니다`);
   });
+  bind('[data-clear-events]', 'click', (e) => clearEvents(e.currentTarget, d));
   bind('[data-bonus]', 'click', (e) => {
     const v = e.currentTarget.dataset.bonus;
     if (v === 'cancel') return savePolicy(d, { bonusMin: 0, bonusUntil: 0 }, '추가 시간을 취소했습니다');
