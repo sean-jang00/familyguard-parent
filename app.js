@@ -557,19 +557,15 @@ function renderHome() {
       <h2 style="margin:6px 0">연결된 자녀 폰이 없어요</h2>
       <p class="sub">아래 '자녀 폰 연결'로 코드를 만든 뒤, 자녀 폰의 패밀리가드 → 부모 설정 → 부모 앱 연결에 입력하세요.</p>
     </div>`}
-    ${codeCard()}
     ${recent.length ? `
       <div class="section-label">최근 알림</div>
       <div class="card">
         ${recent.map(eventRow).join('')}
         <div style="text-align:right;margin-top:6px"><button class="link" data-clear-events="all">알림 비우기</button></div>
       </div>` : ''}
-    <div class="section-label">가족 관리</div>
-    <div class="btns">
-      <button class="btn primary" data-act="pair">자녀 폰 연결</button>
-      <button class="btn" data-act="invite">보호자 초대</button>
-    </div>
+    ${familyPanel()}
     ${deviceSettingsCard()}`;
+  bind('[data-act=family]', 'click', () => { state.familyOpen = !state.familyOpen; render(); });
   bind('[data-clear-events]', 'click', (e) => clearEvents(e.currentTarget, null));
   bind('[data-act=lock-on]', 'click', () => startLock('set1'));
   bind('[data-act=lock-change]', 'click', () => startLock('set1'));
@@ -601,6 +597,31 @@ function codeCard() {
       <p class="sub" style="margin:0">${c.kind === 'device'
         ? '자녀 폰의 패밀리가드 → 부모 설정 → 부모 앱 연결에 입력하세요.'
         : '다른 보호자가 가입한 뒤 \'초대 코드로 합류\'에 입력합니다.'}<br>약 ${left}분 동안 유효합니다.</p>
+    </div>`;
+}
+
+/**
+ * 가족 관리 (자녀 폰 연결·보호자 초대): 처음 한 번만 쓰는 기능이라 평소엔 접어 둔다.
+ * 연결된 자녀 폰이 없거나 방금 코드를 만든 경우에는 펼쳐 둔다.
+ */
+function familyPanel() {
+  const codeLive = state.code && Date.now() < state.code.expires;
+  const open = state.familyOpen || !state.devices.length || codeLive;
+  return `
+    <div class="card fold ${open ? 'open' : ''}">
+      <button class="fold-head" data-act="family" aria-expanded="${open}">
+        <span>👨‍👩‍👧 가족 관리</span>
+        <span class="sub">자녀 폰 연결 · 보호자 초대</span>
+        <svg class="chev" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      ${open ? `
+      <div class="fold-body">
+        <div class="btns">
+          <button class="btn primary" data-act="pair">자녀 폰 연결</button>
+          <button class="btn" data-act="invite">보호자 초대</button>
+        </div>
+        ${codeCard()}
+      </div>` : ''}
     </div>`;
 }
 

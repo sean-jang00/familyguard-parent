@@ -224,6 +224,18 @@ input[type=checkbox].check { width: 22px; height: 22px; accent-color: var(--acce
 .loc-dot.req { opacity: 1; box-shadow: 0 0 0 3px color-mix(in srgb, #3a7bf0 25%, transparent); }
 .tabs button { font-size: 14px; }
 
+/* ── 접는 카드 (가족 관리) ── */
+.fold { padding: 0; overflow: hidden; }
+.fold-head {
+  width: 100%; display: flex; align-items: center; gap: 10px; padding: 16px 18px;
+  background: none; border: 0; color: var(--text); font: inherit; font-weight: 700; text-align: left; cursor: pointer;
+}
+.fold-head .sub { flex: 1; font-weight: 500; }
+.fold-head .chev { color: var(--muted); transition: transform .2s; }
+.fold.open .fold-head .chev { transform: rotate(90deg); }
+.fold-body { padding: 0 18px 18px; }
+.fold-body .card { box-shadow: none; border: 1px solid var(--line); margin: 14px 0 0; }
+
 /* ── 앱별 한도 일괄 처리 ── */
 .bulk { display: flex; flex-direction: column; gap: 10px; padding: 12px; margin: 4px 0 10px; border-radius: 14px; background: var(--surface-2); }
 .bulk .btns > .btn { flex: 1; }
