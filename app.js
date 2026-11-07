@@ -50,7 +50,7 @@ const MODES = [
   { id: 'call_only', name: '통화만', color: 'var(--warn)', desc: '전화와 연락처만 쓸 수 있습니다. 홈 화면·알림창·다른 앱은 막힙니다.' },
   { id: 'locked', name: '잠금', color: 'var(--danger)', desc: '잠금 안내 화면만 보입니다. 걸려 오는 전화와 긴급 전화만 가능합니다.' },
 ];
-const EVENT_ICON = { pin_ok: ['🔑', 'warn'], pin_locked: ['🚨', 'danger'], limit_reached: ['⏰', ''], update_ok: ['✅', ''], update_fail: ['⚠️', 'danger'] };
+const EVENT_ICON = { pin_ok: ['🔑', 'warn'], pin_locked: ['🚨', 'danger'], limit_reached: ['⏰', ''], update_ok: ['✅', ''], update_fail: ['⚠️', 'danger'], parent_change: ['👤', 'warn'] };
 const ONLINE_MS = 3 * 60 * 1000;
 
 const state = {
@@ -192,6 +192,8 @@ async function savePolicy(d, patch, msg) {
   render();
   await run(sb.from('devices').update({ policy, policy_updated_at: new Date().toISOString() }).eq('id', d.id),
     msg ?? (isOnline(d) ? '저장했습니다. 폰에 바로 적용됩니다.' : '저장했습니다. 폰이 연결되면 적용됩니다.'));
+  // 추가 시간·한도 올리기·모드 해제는 서버가 '보호자 변경' 알림을 만든다. 모든 보호자에게 바로 푸시한다.
+  sb.functions.invoke('notify', { body: {} }).catch(() => {});
 }
 
 async function sendCommand(d, type, payload = {}, msg) {
