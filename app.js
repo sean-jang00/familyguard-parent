@@ -50,7 +50,7 @@ const MODES = [
   { id: 'call_only', name: '통화만', color: 'var(--warn)', desc: '전화와 연락처만 쓸 수 있습니다. 홈 화면·알림창·다른 앱은 막힙니다.' },
   { id: 'locked', name: '잠금', color: 'var(--danger)', desc: '잠금 안내 화면만 보입니다. 걸려 오는 전화와 긴급 전화만 가능합니다.' },
 ];
-const EVENT_ICON = { pin_ok: ['🔑', 'warn'], pin_locked: ['🚨', 'danger'], limit_reached: ['⏰', ''] };
+const EVENT_ICON = { pin_ok: ['🔑', 'warn'], pin_locked: ['🚨', 'danger'], limit_reached: ['⏰', ''], update_ok: ['✅', ''], update_fail: ['⚠️', 'danger'] };
 const ONLINE_MS = 3 * 60 * 1000;
 
 const state = {
@@ -1519,6 +1519,50 @@ function tabActivity(d, s) {
     ${dataCard(s)}`;
 }
 
+// 폰 앱 원격 업데이트: PC에서 빌드한 APK를 비공개 저장소(apk/<가족 id>/)에 올리고 'update' 명령을 보낸다.
+// 폰은 해시·패키지·버전을 확인하고, 따님이 폰을 쓰지 않을 때(화면 꺼짐·잠금화면) 조용히 설치한다.
+function updateCard(s) {
+  const u = s.update;
+  const status = u ? `<div class="row"><div class="grow">최근 업데이트</div><span class="sub">${esc(u.message || u.state)}${u.at ? ` · ${esc(ago(new Date(u.at).toISOString()))}` : ''}</span></div>` : '';
+  if (!s.appVersionCode) {
+    return `
+    <div class="card">
+      <div class="card-head"><h2>폰 앱 업데이트</h2></div>
+      <div class="empty">지금 폰 앱은 원격 업데이트를 지원하지 않아요. USB로 한 번 업데이트하면 그 다음부터 여기서 할 수 있어요.</div>
+    </div>`;
+  }
+  return `
+    <div class="card">
+      <div class="card-head"><h2>폰 앱 업데이트</h2></div>
+      ${status}
+      <p class="sub" style="margin:4px 0 10px">PC에서 만든 APK 파일을 고르면 폰으로 보냅니다. 따님이 폰을 쓰는 중이면 화면이 꺼질 때까지 기다렸다가 조용히 설치해요.</p>
+      <label class="row" style="min-height:0;gap:8px"><input type="checkbox" id="updAnyNet"> <span class="sub">모바일 데이터로도 받기 (약 30MB)</span></label>
+      <input type="file" id="updFile" accept=".apk,application/vnd.android.package-archive" hidden>
+      <button class="btn primary full" id="updPick" style="margin-top:8px">APK 파일 선택해서 보내기</button>
+    </div>`;
+}
+
+async function sendUpdate(d, file, anyNetwork) {
+  if (!/\.apk$/i.test(file.name)) throw new Error('APK 파일이 아니에요');
+  if (file.size > 50 * 1024 * 1024) throw new Error('파일이 너무 커요 (50MB 넘음)');
+  const buf = await file.arrayBuffer();
+  const digest = await crypto.subtle.digest('SHA-256', buf);
+  const sha256 = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  const folder = state.family.id;
+  const safe = file.name.replace(/[^A-Za-z0-9._-]/g, '_').replace(/\.apk$/i, '.apk');
+  const path = `${folder}/${Date.now()}-${safe}`;
+  const bucket = sb.storage.from('apk');
+  const { error } = await bucket.upload(path, new Blob([buf], { type: 'application/vnd.android.package-archive' }),
+    { contentType: 'application/vnd.android.package-archive', upsert: false });
+  if (error) throw new Error(`올리기 실패: ${error.message}`);
+  // 예전 파일은 지운다 (방금 올린 것과 바로 전 것만 남김)
+  const { data: old } = await bucket.list(folder, { limit: 100, sortBy: { column: 'name', order: 'desc' } });
+  const stale = (old || []).map((o) => `${folder}/${o.name}`).filter((n) => n !== path).slice(1);
+  if (stale.length) await bucket.remove(stale);
+  await sendCommand(d, 'update', { path, sha256, size: file.size, name: file.name, anyNetwork },
+    '폰으로 업데이트를 보냈어요. 폰을 쓰지 않을 때 설치됩니다');
+}
+
 function tabSettings(d, s) {
   const pushRow = {
     on: '<div class="row"><div class="grow"><div class="row-title">이 폰에서 알림 받는 중</div><div class="sub">부모 PIN 사용, PIN 5회 틀림, 하루 한도 도달</div></div><button class="btn small" data-act="push-off">끄기</button></div>',
@@ -1540,10 +1584,11 @@ function tabSettings(d, s) {
     <div class="card">
       <div class="card-head"><h2>기기 정보</h2></div>
       <div class="row"><div class="grow">마지막 보고</div><span class="sub">${esc(ago(d.last_seen))}</span></div>
-      <div class="row"><div class="grow">앱 버전</div><span class="sub">${esc(s.appVersion || '-')}</span></div>
+      <div class="row"><div class="grow">앱 버전</div><span class="sub">${esc(s.appVersion || '-')}${s.appVersionCode ? ` (${esc(s.appVersionCode)})` : ''}</span></div>
       <div class="row"><div class="grow">인터넷 필터</div><span class="sub">${s.vpn ? '작동 중' : '꺼짐'}</span></div>
       <div class="row"><div class="grow">관리 권한</div><span class="sub">${s.deviceOwner === false ? '없음' : '정상'}</span></div>
     </div>
+    ${updateCard(s)}
     <div class="card">
       <button class="btn danger full" id="removeDevice">이 기기 연결 끊기</button>
       <p class="sub" style="margin-bottom:0">연결을 끊어도 폰의 제한은 그대로 남습니다. 완전히 해제하려면 폰의 부모 설정에서 '관리 해제'를 누르세요.</p>
@@ -1656,6 +1701,21 @@ function bindDevice(d, s, p) {
     const hash = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
     await sendCommand(d, 'set_pin', { salt, hash }, '폰의 PIN 변경을 요청했습니다');
   });
+  q('#updPick')?.addEventListener('click', () => q('#updFile').click());
+  q('#updFile')?.addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const b = q('#updPick');
+    b.disabled = true;
+    b.textContent = '올리는 중…';
+    try {
+      await sendUpdate(d, file, q('#updAnyNet').checked);
+    } catch (err) {
+      toast(err.message || String(err));
+      b.disabled = false;
+      b.textContent = 'APK 파일 선택해서 보내기';
+    }
+  });
   q('#removeDevice')?.addEventListener('click', async (e) => {
     const b = e.currentTarget;
     if (b.dataset.confirm !== '1') {
@@ -1671,7 +1731,7 @@ function bindDevice(d, s, p) {
 }
 
 function cmdLabel(c, d) {
-  const names = { approve: '앱 승인', uninstall: '앱 삭제', lock_now: '화면 끄기', set_pin: 'PIN 변경', locate: '위치 요청', ring: '소리 울리기', ring_stop: '소리 끄기' };
+  const names = { approve: '앱 승인', uninstall: '앱 삭제', lock_now: '화면 끄기', set_pin: 'PIN 변경', locate: '위치 요청', ring: '소리 울리기', ring_stop: '소리 끄기', update: '폰 앱 업데이트' };
   const label = c.payload?.pkg ? ((d?.state?.pending || []).find((a) => a.pkg === c.payload.pkg)?.label || c.payload.pkg) : '';
   return `${names[c.type] || c.type}${label ? `: ${label}` : ''}`;
 }
