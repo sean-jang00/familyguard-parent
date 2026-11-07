@@ -274,7 +274,8 @@ function pushBanner(compact) {
 
 // ───────── 앱 잠금 PIN ─────────
 // 이 휴대폰에서만 쓰는 4자리 PIN. 서버로 보내지 않고 PBKDF2 해시만 이 브라우저에 저장한다.
-// 앱을 열 때와 3분 넘게 다른 앱에 있다가 돌아올 때 잠긴다 (3분 안의 새로고침은 그대로 둔다). 5번 틀리면 로그아웃된다.
+// 앱을 새로 열 때(종료 후 다시 시작)는 항상 잠긴다. 새로고침(화면 당기기)만 3분 안이면 그대로 둔다.
+// 다른 앱에 갔다가 3분 넘게 지나서 돌아와도 잠긴다. 5번 틀리면 로그아웃된다.
 // 추가 시간 주기는 3분 규칙과 상관없이 매번 PIN을 묻는다 ([askPin]). PIN이 없으면 먼저 만들게 한다.
 
 const PIN_LEN = 4;
@@ -291,6 +292,10 @@ function markActive() {
 }
 function recentlyActive() {
   try { return Date.now() - Number(localStorage.getItem(ACTIVE_KEY) || 0) < LOCK_AFTER_MS; } catch { return false; }
+}
+// 이번 페이지 로드가 새로고침인지 (앱을 종료했다가 다시 열면 'navigate'라서 PIN을 묻는다)
+function isReload() {
+  try { return performance.getEntriesByType('navigation')[0]?.type === 'reload'; } catch { return false; }
 }
 setInterval(() => { if (document.visibilityState === 'visible') markActive(); }, 5000);
 addEventListener('pagehide', markActive);
@@ -1780,7 +1785,7 @@ sb.auth.onAuthStateChange((event, session) => {
   }
   if (changedUser) {
     // 이미 로그인된 상태로 앱을 열면 PIN부터 묻는다 (방금 이메일로 로그인한 경우는 제외).
-    if (lockConfig() && !lock.justLoggedIn && !recentlyActive()) Object.assign(lock, { step: 'unlock', entry: '', msg: '' });
+    if (lockConfig() && !lock.justLoggedIn && !(isReload() && recentlyActive())) Object.assign(lock, { step: 'unlock', entry: '', msg: '' });
     lock.justLoggedIn = false;
     // 콜백 안에서 바로 Supabase를 호출하면 교착될 수 있어서 다음 틱으로 미룬다.
     setTimeout(async () => {
