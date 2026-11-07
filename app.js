@@ -275,11 +275,12 @@ function pushBanner(compact) {
 // ───────── 앱 잠금 PIN ─────────
 // 이 휴대폰에서만 쓰는 4자리 PIN. 서버로 보내지 않고 PBKDF2 해시만 이 브라우저에 저장한다.
 // 앱을 열 때와 3분 넘게 다른 앱에 있다가 돌아올 때 잠긴다 (3분 안의 새로고침은 그대로 둔다). 5번 틀리면 로그아웃된다.
+// 추가 시간 주기는 3분 규칙과 상관없이 매번 PIN을 묻는다 ([askPin]). PIN이 없으면 먼저 만들게 한다.
 
 const PIN_LEN = 4;
 const LOCK_AFTER_MS = 3 * 60 * 1000; // 마지막으로 쓴 뒤 3분 안이면 PIN을 다시 묻지 않는다
 const MAX_FAILS = 5;
-const lock = { step: null, entry: '', first: '', msg: '', shake: false, hiddenAt: 0, busy: false };
+const lock = { step: null, entry: '', first: '', msg: '', shake: false, hiddenAt: 0, busy: false, pending: null, reason: '' };
 
 // 잠금이 풀린 채로 쓰고 있었던 마지막 시각. 새로고침(화면 당기기)이나 잠깐 껐다 켠 경우 3분 안에는 PIN을 다시 묻지 않는다.
 // 잠겨 있는 동안에는 기록하지 않으므로, 잠금 화면에서 새로고침해도 풀리지 않는다.
@@ -316,6 +317,23 @@ function startLock(step) {
   render();
 }
 
+/** 중요한 동작 전에 PIN을 다시 확인한다. 맞으면 action을 실행한다. 이 폰에 PIN이 없으면 먼저 만들게 한다. */
+function askPin(reason, action) {
+  lock.pending = action;
+  lock.reason = reason;
+  if (lockConfig()) return startLock('confirm');
+  startLock('set1');
+  lock.msg = '먼저 이 폰의 앱 잠금 PIN을 만들어 주세요';
+  render();
+}
+
+function runPending() {
+  const action = lock.pending;
+  lock.pending = null;
+  lock.reason = '';
+  if (action) action();
+}
+
 async function signOutAll(message) {
   saveLockConfig(null);
   try { localStorage.removeItem(ACTIVE_KEY); } catch { /* 무시 */ }
@@ -335,13 +353,15 @@ async function pinDigit(d) {
   try {
     const pin = lock.entry;
     lock.entry = '';
-    if (lock.step === 'unlock') {
+    if (lock.step === 'unlock' || lock.step === 'confirm') {
       const c = lockConfig();
       if (!c) { lock.step = null; return; }
       if (await pinHash(pin, c.salt, c.iterations) === c.hash) {
         saveLockConfig({ ...c, fails: 0 });
+        const confirming = lock.step === 'confirm';
         lock.step = null;
         markActive();
+        if (confirming) runPending();
         return;
       }
       const fails = (c.fails || 0) + 1;
@@ -362,6 +382,7 @@ async function pinDigit(d) {
         saveLockConfig({ salt, iterations, hash: await pinHash(pin, salt, iterations), fails: 0 });
         lock.step = null;
         toast('앱 잠금 PIN을 설정했습니다');
+        runPending();
       }
     }
   } finally {
@@ -374,7 +395,7 @@ function renderLock() {
   $title.textContent = '';
   $logout.hidden = true;
   $back.hidden = true;
-  const title = { unlock: 'PIN을 입력하세요', set1: '새 PIN 4자리를 입력하세요', set2: '한 번 더 입력하세요' }[lock.step];
+  const title = { unlock: 'PIN을 입력하세요', confirm: `${lock.reason || '계속하려면'} PIN을 입력하세요`, set1: '새 PIN 4자리를 입력하세요', set2: '한 번 더 입력하세요' }[lock.step];
   const keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9', lock.step === 'unlock' ? '' : 'cancel', '0', 'del'];
   $app.innerHTML = `
     <div class="lock-screen">
@@ -393,7 +414,7 @@ function renderLock() {
     </div>`;
   bind('[data-key]', 'click', (e) => {
     const k = e.currentTarget.dataset.key;
-    if (k === 'cancel') { lock.step = null; return render(); }
+    if (k === 'cancel') { lock.step = null; lock.pending = null; lock.reason = ''; return render(); }
     pinDigit(k);
   });
   bind('[data-act=forgot]', 'click', () => signOutAll('로그아웃했습니다. 이메일로 로그인한 뒤 PIN을 다시 설정하세요.'));
@@ -570,8 +591,9 @@ function renderHome() {
   bind('[data-act=family]', 'click', () => { state.familyOpen = !state.familyOpen; render(); });
   bind('[data-clear-events]', 'click', (e) => clearEvents(e.currentTarget, null));
   bind('[data-act=lock-on]', 'click', () => startLock('set1'));
-  bind('[data-act=lock-change]', 'click', () => startLock('set1'));
-  bind('[data-act=lock-off]', 'click', () => { saveLockConfig(null); toast('앱 잠금을 껐습니다'); render(); });
+  // PIN을 바꾸거나 끄는 것도 지금 PIN을 알아야 한다 (안 그러면 추가 시간 PIN 확인을 우회할 수 있다)
+  bind('[data-act=lock-change]', 'click', () => askPin('PIN을 바꾸려면 지금', () => startLock('set1')));
+  bind('[data-act=lock-off]', 'click', () => askPin('앱 잠금을 끄려면', () => { saveLockConfig(null); toast('앱 잠금을 껐습니다'); render(); }));
   bind('[data-act=push-off]', 'click', disablePush);
   bind('[data-device]', 'click', (e) => openDevice(e.currentTarget.dataset.device));
   bind('[data-device]', 'keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDevice(e.currentTarget.dataset.device); } });
@@ -1609,8 +1631,12 @@ function bindDevice(d, s, p) {
     const v = e.currentTarget.dataset.bonus;
     if (v === 'cancel') return savePolicy(d, { bonusMin: 0, bonusUntil: 0 }, '추가 시간을 취소했습니다');
     const m = Number(v);
-    savePolicy(d, { bonusMin: Math.min(activeBonus(p) + m, 720), bonusUntil: nextReset(p.resetMin) },
-      `${fmtDuration(m * 60000)}을 더 줬습니다 (오늘 총 +${fmtDuration((activeBonus(p) + m) * 60000)})`);
+    // 보호자 폰을 다른 사람이 들고 누르는 경우를 막으려고 매번 PIN을 묻는다.
+    askPin(`${fmtDuration(m * 60000)}을 더 주려면`, () => {
+      const cur = policyOf(d);
+      savePolicy(d, { bonusMin: Math.min(activeBonus(cur) + m, 720), bonusUntil: nextReset(cur.resetMin) },
+        `${fmtDuration(m * 60000)}을 더 줬습니다 (오늘 총 +${fmtDuration((activeBonus(cur) + m) * 60000)})`);
+    });
   });
   bind('[data-approve]', 'click', (e) => sendCommand(d, 'approve', { pkg: e.currentTarget.dataset.approve }, '승인했습니다'));
   bind('[data-uninstall]', 'click', (e) => sendCommand(d, 'uninstall', { pkg: e.currentTarget.dataset.uninstall }, '삭제 명령을 보냈습니다'));
