@@ -711,6 +711,7 @@ function renderDevice(d) {
   bindDevice(d, s, p);
   if (state.tab === 'location') showMap(d).catch((e) => toast(`지도 표시 실패: ${e.message || e}`));
   if (state.tab === 'activity') showPatterns(d).catch((e) => toast(`패턴 표시 실패: ${e.message || e}`));
+  if (state.tab === 'activity') showSites(d).catch((e) => toast(`사이트 기록 표시 실패: ${e.message || e}`));
 }
 
 function tabOverview(d, s, p) {
@@ -1421,6 +1422,76 @@ async function showPatterns(d) {
   renderWeek(weekCard, days);
 }
 
+// 방문한 사이트: 폰의 인터넷 필터가 본 사이트 이름 (검색어·페이지 주소는 알 수 없음). 기록은 폰에 있다.
+const BROWSERS = new Set(['com.android.chrome', 'com.sec.android.app.sbrowser', 'org.mozilla.firefox', 'com.naver.whale', 'com.microsoft.emmx', 'com.opera.browser', 'com.brave.browser', 'com.duckduckgo.mobile.android']);
+const SITES_SHOWN = 60;
+
+function sitesCard() {
+  const day = state.siteDay || 0;
+  const only = state.siteBrowserOnly !== false;
+  return `
+    <div class="card" id="sitesCard">
+      <div class="card-head"><h2>🌐 방문한 사이트</h2></div>
+      <div class="chips day-chips" style="margin-top:0">
+        ${Array.from({ length: 7 }, (_, i) => `<button class="chip ${i === day ? 'sel' : ''}" data-siteday="${i}">${esc(locDayLabel(i))}</button>`).join('')}
+      </div>
+      <div class="chips day-chips">
+        <button class="chip ${only ? 'sel' : ''}" data-sitefilter="browser">브라우저</button>
+        <button class="chip ${only ? '' : 'sel'}" data-sitefilter="all">모든 앱</button>
+      </div>
+      <p class="sub" style="margin:8px 0 4px">사이트 이름까지만 보여요. 검색어나 읽은 글은 알 수 없어요. 화면을 쓰는 동안의 접속만 기록합니다.</p>
+      <div id="sitesList"><div class="empty">폰에서 기록을 가져오는 중…</div></div>
+    </div>`;
+}
+
+async function loadSites(d, offset) {
+  state.sites = state.sites || {};
+  const key = `${d.id}:${offset}`;
+  const c = state.sites[key];
+  if (c && (offset > 0 || Date.now() - c.at < 60000)) return c.list;
+  const res = await requestHistory(d, { kind: 'sites', day: localDate(locDayRange(offset)[0]) });
+  const list = res.visits || [];
+  state.sites[key] = { at: Date.now(), list };
+  return list;
+}
+
+async function showSites(d) {
+  const day = state.siteDay || 0;
+  let list;
+  try {
+    list = await loadSites(d, day);
+  } catch (e) {
+    const el = document.getElementById('sitesList');
+    const msg = String(e.message || e).includes('알 수 없는 기록') ? '폰 앱을 업데이트하면 볼 수 있어요.' : (e.message || e);
+    if (el) el.innerHTML = `<div class="empty">${esc(msg)}</div>`;
+    return;
+  }
+  const el = document.getElementById('sitesList');
+  if (!el || state.tab !== 'activity' || state.deviceId !== d.id || (state.siteDay || 0) !== day) return;
+  const only = state.siteBrowserOnly !== false;
+  const rows = list.filter((v) => !only || BROWSERS.has(v.pkg)).sort((a, b) => b.start - a.start);
+  if (!rows.length) {
+    el.innerHTML = `<div class="empty">${only ? '브라우저로 연 사이트가 없어요.' : '기록이 없어요.'}</div>`;
+    return;
+  }
+  // 많이 간 사이트
+  const bySite = new Map();
+  rows.forEach((v) => bySite.set(v.site, (bySite.get(v.site) || 0) + 1));
+  const top = [...bySite.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8);
+  const shown = state.sitesAll ? rows : rows.slice(0, SITES_SHOWN);
+  const span = (v) => (v.last - v.start >= 60000 ? `${hhmm(v.start)}–${hhmm(v.last)}` : hhmm(v.start));
+  el.innerHTML = `
+    <div class="chips" style="margin:4px 0 8px">${top.map(([site, n]) => `<span class="chip">${esc(site)} · ${n}회</span>`).join('')}</div>
+    ${shown.map((v) => `
+      <div class="row">
+        <span class="sub" style="min-width:78px">${esc(span(v))}</span>
+        <div class="grow"><div class="ellipsis">${esc(v.site)}</div><div class="sub ellipsis">${esc((v.hosts || []).filter((h) => h !== v.site && h !== `www.${v.site}`).slice(0, 3).join(', ') || ' ')}</div></div>
+        <span class="sub ellipsis" style="max-width:30%">${esc(v.app)}</span>
+      </div>`).join('')}
+    ${rows.length > shown.length ? `<button class="btn soft full" id="sitesMore" style="margin-top:8px">${rows.length - shown.length}개 더 보기</button>` : ''}`;
+  document.getElementById('sitesMore')?.addEventListener('click', () => { state.sitesAll = true; showSites(d); });
+}
+
 function tabActivity(d, s) {
   const hits = s.hits || [];
   const devEvents = state.events.filter((e) => e.device_id === d.id);
@@ -1438,6 +1509,7 @@ function tabActivity(d, s) {
       <div class="card-head"><h2>오늘 차단된 접속</h2></div>
       ${hits.length ? hits.map((h) => `<div class="row">${avatar(h.app, h.app)}<div class="grow"><div class="ellipsis">${esc(h.app)}</div><div class="sub ellipsis">${esc(h.domain)}</div></div><span class="sub">${esc(h.count)}회</span></div>`).join('') : '<div class="empty">없습니다.</div>'}
     </div>
+    ${sitesCard()}
     ${cmds.length ? `
     <div class="card">
       <div class="card-head"><h2>보낸 명령</h2></div>
@@ -1504,6 +1576,8 @@ function bindDevice(d, s, p) {
   // 위치
   q('#locate')?.addEventListener('click', () => locateNow(d));
   q('#locInterval')?.addEventListener('change', (e) => savePolicy(d, { locationIntervalMin: Number(e.target.value) }));
+  bind('[data-siteday]', 'click', (e) => { state.siteDay = Number(e.currentTarget.dataset.siteday); state.sitesAll = false; render(); });
+  bind('[data-sitefilter]', 'click', (e) => { state.siteBrowserOnly = e.currentTarget.dataset.sitefilter === 'browser'; state.sitesAll = false; render(); });
   bind('[data-locday]', 'click', (e) => { state.locDay = Number(e.currentTarget.dataset.locday); state.mapView = null; render(); });
   q('#locDate')?.addEventListener('change', (e) => {
     if (!e.target.value) return;
