@@ -752,7 +752,9 @@ function tabOverview(d, s, p) {
     <div class="card">
       <div class="card-head"><h2>🎁 오늘 추가 시간</h2>${activeBonus(p) ? `<span class="chip ok">+${fmtDuration(activeBonus(p) * 60000)}</span>` : ''}</div>
       <p class="sub" style="margin-top:-4px">하루 한도와 앱별 한도에 더해집니다. ${esc(resetLabel(p.resetMin))}에 자동으로 사라져요.</p>
-      <div class="btns">
+      <div class="btns bonus-btns">
+        <button class="btn soft" data-bonus="5">+5분</button>
+        <button class="btn soft" data-bonus="10">+10분</button>
         <button class="btn soft" data-bonus="15">+15분</button>
         <button class="btn soft" data-bonus="30">+30분</button>
         <button class="btn soft" data-bonus="60">+1시간</button>

@@ -121,6 +121,9 @@ main { max-width: 640px; margin: 0 auto; padding: 4px 16px calc(env(safe-area-in
 .btn:disabled { opacity: .5; cursor: default; }
 .btns { display: flex; gap: 10px; flex-wrap: wrap; }
 .btns > .btn { flex: 1; }
+/* 추가 시간 버튼 5개: 폰 화면에서도 한 줄에 */
+.bonus-btns { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+.bonus-btns > .btn { padding: 0 4px; white-space: nowrap; }
 
 /* ── 입력 ── */
 input[type=email], input[type=password], input[type=text], input[type=time], select {
