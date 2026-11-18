@@ -50,7 +50,7 @@ const MODES = [
   { id: 'call_only', name: '통화만', color: 'var(--warn)', desc: '전화와 연락처만 쓸 수 있습니다. 홈 화면·알림창·다른 앱은 막힙니다.' },
   { id: 'locked', name: '잠금', color: 'var(--danger)', desc: '잠금 안내 화면만 보입니다. 걸려 오는 전화와 긴급 전화만 가능합니다.' },
 ];
-const EVENT_ICON = { pin_ok: ['🔑', 'warn'], pin_locked: ['🚨', 'danger'], limit_reached: ['⏰', ''], update_ok: ['✅', ''], update_fail: ['⚠️', 'danger'], parent_change: ['👤', 'warn'] };
+const EVENT_ICON = { pin_ok: ['🔑', 'warn'], pin_locked: ['🚨', 'danger'], limit_reached: ['⏰', ''], update_ok: ['✅', ''], update_fail: ['⚠️', 'danger'], parent_change: ['👤', 'warn'], reboot: ['🔄', 'warn'], usage_mismatch: ['🧮', 'warn'] };
 const ONLINE_MS = 3 * 60 * 1000;
 
 const state = {
