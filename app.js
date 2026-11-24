@@ -442,8 +442,8 @@ function deviceSettingsCard() {
     <div class="card">
       <div class="row">
         <div class="grow">
-          <div class="row-title">앱 잠금 PIN</div>
-          <div class="sub">${c ? '켜짐 · 앱을 열 때 PIN 4자리를 입력합니다' : '꺼짐 · 다른 사람이 이 폰으로 설정을 바꾸지 못하게 막아요'}</div>
+          <div class="row-title">앱 잠금 PIN (이 기기에만 저장)</div>
+          <div class="sub">${c ? '켜짐 · 앱을 열 때와 추가 시간을 줄 때 PIN 4자리를 입력합니다' : '꺼짐 · 다른 사람이 이 폰으로 설정을 바꾸지 못하게 막아요'}<br>딸 폰의 부모 PIN과는 별개라서, 바꾸려면 보호자 기기마다 따로 바꿔야 합니다.</div>
         </div>
         ${c
           ? '<button class="btn small" data-act="lock-change">변경</button><button class="btn small danger" data-act="lock-off">끄기</button>'
@@ -1650,7 +1650,7 @@ function tabSettings(d, s) {
     </div>
     <div class="card">
       <div class="card-head"><h2>폰의 부모 PIN 변경</h2></div>
-      <p class="sub" style="margin-top:-4px">PIN 원문은 서버에 보내지 않고, 암호화한 값만 폰에 전달합니다.</p>
+      <p class="sub" style="margin-top:-4px">PIN 원문은 서버에 보내지 않고, 암호화한 값만 폰에 전달합니다. 이 웹앱의 앱 잠금 PIN은 바뀌지 않습니다 (홈 화면 '이 폰 설정'에서 따로 바꾸세요).</p>
       <form id="pinForm" class="row" autocomplete="off">
         <input type="password" name="pin" inputmode="numeric" pattern="[0-9]{4,8}" minlength="4" maxlength="8" placeholder="새 PIN (숫자 4~8자리)" required style="flex:1">
         <button class="btn primary">변경</button>
