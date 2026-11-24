@@ -50,7 +50,7 @@ const MODES = [
   { id: 'call_only', name: '통화만', color: 'var(--warn)', desc: '전화와 연락처만 쓸 수 있습니다. 홈 화면·알림창·다른 앱은 막힙니다.' },
   { id: 'locked', name: '잠금', color: 'var(--danger)', desc: '잠금 안내 화면만 보입니다. 걸려 오는 전화와 긴급 전화만 가능합니다.' },
 ];
-const EVENT_ICON = { pin_ok: ['🔑', 'warn'], pin_locked: ['🚨', 'danger'], limit_reached: ['⏰', ''], update_ok: ['✅', ''], update_fail: ['⚠️', 'danger'], parent_change: ['👤', 'warn'], reboot: ['🔄', 'warn'], usage_mismatch: ['🧮', 'warn'] };
+const EVENT_ICON = { pin_ok: ['🔑', 'warn'], pin_locked: ['🚨', 'danger'], limit_reached: ['⏰', ''], update_ok: ['✅', ''], update_fail: ['⚠️', 'danger'], parent_change: ['👤', 'warn'], reboot: ['🔄', 'warn'], usage_mismatch: ['🧮', 'warn'], app_exit: ['💥', 'danger'], bg_restricted: ['🪫', 'danger'], offline: ['📵', 'warn'], online: ['📶', ''] };
 const ONLINE_MS = 3 * 60 * 1000;
 
 const state = {
@@ -434,8 +434,8 @@ document.addEventListener('keydown', (e) => {
 function deviceSettingsCard() {
   const c = lockConfig();
   const pushRow = {
-    on: '<div class="row"><div class="grow"><div class="row-title">알림 받는 중</div><div class="sub">부모 PIN 사용, PIN 5회 틀림, 하루 한도 도달</div></div><button class="btn small" data-act="push-off">끄기</button></div>',
-    off: '<div class="row"><div class="grow"><div class="row-title">알림 받기</div><div class="sub">부모 PIN 사용, PIN 5회 틀림, 하루 한도 도달</div></div><button class="btn primary small" data-act="push-on">켜기</button></div>',
+    on: '<div class="row"><div class="grow"><div class="row-title">알림 받는 중</div><div class="sub">부모 PIN 사용, 하루 한도 도달, 연결 끊김, 앱 꺼짐</div></div><button class="btn small" data-act="push-off">끄기</button></div>',
+    off: '<div class="row"><div class="grow"><div class="row-title">알림 받기</div><div class="sub">부모 PIN 사용, 하루 한도 도달, 연결 끊김, 앱 꺼짐</div></div><button class="btn primary small" data-act="push-on">켜기</button></div>',
   }[state.push] || '';
   return `
     <div class="section-label">이 폰 설정</div>
@@ -548,14 +548,15 @@ function statusChips(d) {
   const p = policyOf(d);
   const mode = MODES.find((m) => m.id === p.mode);
   return `
-    <span class="chip ${isOnline(d) ? 'ok' : ''}"><span class="dot ${isOnline(d) ? 'on' : ''}"></span>${isOnline(d) ? '온라인' : esc(ago(d.last_seen))}</span>
+    <span class="chip ${isOnline(d) ? 'ok' : 'warn'}"><span class="dot ${isOnline(d) ? 'on' : ''}"></span>${isOnline(d) ? '온라인' : `연결 끊김 · ${esc(d.last_seen ? hhmm(d.last_seen) : '-')} (${esc(ago(d.last_seen))})`}</span>
     ${screenChip(d)}
     ${p.mode !== 'normal' ? `<span class="chip ${p.mode === 'locked' ? 'danger' : 'warn'}">${esc(mode?.name)} 모드</span>` : ''}
     ${s.battery != null ? `<span class="chip">🔋 ${esc(s.battery)}%</span>` : ''}
     ${s.location ? `<span class="chip">📍 ${esc(ago(new Date(s.location.at).toISOString()))}</span>` : ''}
     ${s.mobileData ? `<span class="chip">📶 이번 달 ${esc(fmtBytes(s.mobileData.monthBytes))}</span>` : ''}
     ${s.vpn === false ? '<span class="chip danger">인터넷 필터 꺼짐</span>' : ''}
-    ${s.deviceOwner === false ? '<span class="chip danger">관리 권한 없음</span>' : ''}`;
+    ${s.deviceOwner === false ? '<span class="chip danger">관리 권한 없음</span>' : ''}
+    ${s.bgRestricted ? '<span class="chip danger">배터리 제한됨</span>' : ''}`;
 }
 
 function renderHome() {
@@ -570,7 +571,9 @@ function renderHome() {
         ${usageRing(d, 64, 7, false)}
         <div style="flex:1;min-width:0">
           <h3>${esc(d.name)} ${pending ? `<span class="badge">${pending}</span>` : ''}</h3>
-          <div class="sub ellipsis">${fg ? `지금 ${esc(fg)} 사용 중` : `오늘 ${fmtDuration(s.screenTimeMs)} 사용`}</div>
+          <div class="sub ellipsis">${!isOnline(d)
+            ? `마지막 연결 때 ${fg ? `${esc(fg)} 사용 중` : `${fmtDuration(s.screenTimeMs)} 사용`}`
+            : fg ? `지금 ${esc(fg)} 사용 중` : `오늘 ${fmtDuration(s.screenTimeMs)} 사용`}</div>
           <div class="chips" style="margin-top:8px">${statusChips(d)}</div>
         </div>
         <svg class="chev" width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -720,14 +723,14 @@ function renderDevice(d) {
       <div class="hero">
         ${usageRing(d, 112, 11, true)}
         <div style="flex:1;min-width:0">
-          <div class="sub">오늘 사용</div>
+          <div class="sub">${isOnline(d) ? '오늘 사용' : `오늘 사용 · ${esc(d.last_seen ? hhmm(d.last_seen) : '-')} 마지막 연결 기준`}</div>
           <div class="big">${fmtDuration(s.screenTimeMs)}</div>
           <div class="sub">${effTotal(p) != null
             ? `하루 한도 ${esc(limitName(p.totalDailyLimitMin))}${activeBonus(p) ? ` <b style="color:var(--accent)">+${fmtDuration(activeBonus(p) * 60000)}</b>` : ''} · ${limited >= effTotal(p) * 60000 ? '<b style="color:var(--danger)">다 사용함</b>' : `남은 시간 ${fmtDuration(effTotal(p) * 60000 - limited)}`}`
             : '하루 한도 없음'} · 잠금 해제 ${esc(s.unlocks ?? 0)}회</div>
         </div>
       </div>
-      <div class="chips">${statusChips(d)}${(s.foreground || []).map((a) => `<span class="chip">▶ ${esc(a.label)}</span>`).join('')}</div>
+      <div class="chips">${statusChips(d)}${(s.foreground || []).map((a) => `<span class="chip">${isOnline(d) ? '▶' : '그때 ▶'} ${esc(a.label)}</span>`).join('')}</div>
     </div>
     <div class="tabs" role="tablist">
       ${tabs.map(([id, name]) => `<button role="tab" data-tab="${id}" aria-selected="${state.tab === id}">${name}${id === 'overview' && pending.length ? ` <span class="badge">${pending.length}</span>` : ''}</button>`).join('')}
@@ -1594,10 +1597,51 @@ async function sendUpdate(d, file, anyNetwork) {
     '폰으로 업데이트를 보냈어요. 폰을 쓰지 않을 때 설치됩니다');
 }
 
+// 원격 진단: 폰 상태와 최근 기록을 받아 본다. 결과는 서버에 남지 않는다 (history 명령과 같은 방식).
+const diagState = new Map();
+const fmtAt = (t) => new Date(t).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+function diagCard(d) {
+  const st = diagState.get(d.id) || {};
+  const r = st.data;
+  const yesNo = (v, good, bad) => (v ? good : bad);
+  const body = st.loading ? '<p class="sub">폰에 요청하는 중… (최대 45초)</p>'
+    : st.error ? `<p class="sub" style="color:var(--danger)">${esc(st.error)}</p>`
+    : r ? `
+      <div class="row"><div class="grow">받은 시각</div><span class="sub">${esc(fmtAt(r.takenAt))}</span></div>
+      <div class="row"><div class="grow">앱 버전</div><span class="sub">${esc(r.appVersion)}</span></div>
+      <div class="row"><div class="grow">마지막 부팅</div><span class="sub">${esc(fmtAt(r.bootAt))}</span></div>
+      <div class="row"><div class="grow">배터리 사용 제한</div><span class="sub" style="${r.bgRestricted ? 'color:var(--danger)' : ''}">${yesNo(r.bgRestricted, '제한됨 (앱이 꺼지면 다시 안 켜짐)', '정상')}</span></div>
+      <div class="row"><div class="grow">강제 중지 차단</div><span class="sub">${yesNo(r.forceStopBlocked, '켜짐', '꺼짐')}</span></div>
+      <div class="row"><div class="grow">관리 권한 · 인터넷 필터</div><span class="sub">${yesNo(r.deviceOwner, '정상', '없음')} · ${yesNo(r.vpn, '작동 중', '꺼짐')}</span></div>
+      <div class="row"><div class="grow">네트워크</div><span class="sub">${esc(r.network)}</span></div>
+      <div class="row"><div class="grow">남은 메모리</div><span class="sub">${esc(r.memoryAvailMb)} / ${esc(r.memoryTotalMb)} MB${r.lowMemory ? ' (부족)' : ''}</span></div>
+      ${r.cloudError ? `<div class="row"><div class="grow">최근 서버 오류</div><span class="sub">${esc(r.cloudError)}</span></div>` : ''}
+      <h3 style="margin:14px 0 6px">앱이 꺼진 기록</h3>
+      ${(r.exits || []).length ? r.exits.map((x) => `<div class="row"><div class="grow">${esc(x.reason)}${x.description ? ` <span class="sub">(${esc(x.description)})</span>` : ''}</div><span class="sub">${esc(fmtAt(x.at))}</span></div>`).join('') : '<p class="sub">없음</p>'}
+      <details style="margin-top:10px"><summary>최근 3시간 화면·앱 기록 (${(r.events || []).length}건)</summary>
+        ${(r.events || []).map((e) => `<div class="row"><div class="grow">${esc(e.kind)}${e.app ? ` · ${esc(e.app)}` : ''}${e.screen ? ` <span class="sub">(${esc(e.screen)})</span>` : ''}</div><span class="sub">${esc(fmtAt(e.at))}</span></div>`).join('')}
+      </details>`
+    : '<p class="sub">폰 앱 상태, 배터리 제한 여부, 앱이 꺼진 기록, 최근 3시간 화면·앱 기록을 받아 봅니다. 결과는 서버에 남지 않습니다.</p>';
+  return `
+    <div class="card">
+      <div class="card-head"><h2>원격 진단</h2><button class="btn small" data-act="diag" ${st.loading ? 'disabled' : ''}>진단 받기</button></div>
+      ${body}
+    </div>`;
+}
+
+function runDiag(d) {
+  diagState.set(d.id, { loading: true });
+  render();
+  requestHistory(d, { kind: 'diag' })
+    .then((data) => diagState.set(d.id, { data }))
+    .catch((e) => diagState.set(d.id, { error: e.message }))
+    .finally(() => render());
+}
+
 function tabSettings(d, s) {
   const pushRow = {
-    on: '<div class="row"><div class="grow"><div class="row-title">이 폰에서 알림 받는 중</div><div class="sub">부모 PIN 사용, PIN 5회 틀림, 하루 한도 도달</div></div><button class="btn small" data-act="push-off">끄기</button></div>',
-    off: '<div class="row"><div class="grow"><div class="row-title">이 폰에서 알림 받기</div><div class="sub">부모 PIN 사용, PIN 5회 틀림, 하루 한도 도달</div></div><button class="btn primary small" data-act="push-on">켜기</button></div>',
+    on: '<div class="row"><div class="grow"><div class="row-title">이 폰에서 알림 받는 중</div><div class="sub">부모 PIN 사용, 하루 한도 도달, 연결 끊김, 앱 꺼짐</div></div><button class="btn small" data-act="push-off">끄기</button></div>',
+    off: '<div class="row"><div class="grow"><div class="row-title">이 폰에서 알림 받기</div><div class="sub">부모 PIN 사용, 하루 한도 도달, 연결 끊김, 앱 꺼짐</div></div><button class="btn primary small" data-act="push-on">켜기</button></div>',
   }[state.push] || pushBanner(false);
   return `
     <div class="card">
@@ -1619,6 +1663,7 @@ function tabSettings(d, s) {
       <div class="row"><div class="grow">인터넷 필터</div><span class="sub">${s.vpn ? '작동 중' : '꺼짐'}</span></div>
       <div class="row"><div class="grow">관리 권한</div><span class="sub">${s.deviceOwner === false ? '없음' : '정상'}</span></div>
     </div>
+    ${diagCard(d)}
     ${updateCard(s)}
     <div class="card">
       <button class="btn danger full" id="removeDevice">이 기기 연결 끊기</button>
@@ -1634,6 +1679,7 @@ function bindDevice(d, s, p) {
     if (m !== p.mode) savePolicy(d, { mode: m }, `${MODES.find((x) => x.id === m).name} 모드로 바꿨습니다`);
   });
   bind('[data-clear-events]', 'click', (e) => clearEvents(e.currentTarget, d));
+  bind('[data-act=diag]', 'click', () => runDiag(d));
   bind('[data-bonus]', 'click', (e) => {
     const v = e.currentTarget.dataset.bonus;
     if (v === 'cancel') return savePolicy(d, { bonusMin: 0, bonusUntil: 0 }, '추가 시간을 취소했습니다');
