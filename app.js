@@ -557,6 +557,7 @@ function statusChips(d) {
     ${s.deviceOwner === false ? '<span class="chip danger">관리 권한 없음</span>' : ''}
     ${s.bgRestricted ? '<span class="chip danger">배터리 제한됨</span>' : ''}
     ${s.usageAccess === false ? '<span class="chip danger">사용시간 측정 꺼짐</span>' : ''}
+    ${s.pinBlocked === false && policyOf(d).phonePinDisabled ? '<span class="chip warn">폰 PIN 끄기 적용 전</span>' : ''}
     ${s.vpnHealthy === false && s.vpn ? '<span class="chip danger">인터넷 필터 멈춤</span>' : ''}`;
 }
 
