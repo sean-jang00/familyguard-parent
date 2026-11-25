@@ -50,7 +50,7 @@ const MODES = [
   { id: 'call_only', name: '통화만', color: 'var(--warn)', desc: '전화와 연락처만 쓸 수 있습니다. 홈 화면·알림창·다른 앱은 막힙니다.' },
   { id: 'locked', name: '잠금', color: 'var(--danger)', desc: '잠금 안내 화면만 보입니다. 걸려 오는 전화와 긴급 전화만 가능합니다.' },
 ];
-const EVENT_ICON = { pin_ok: ['🔑', 'warn'], pin_locked: ['🚨', 'danger'], limit_reached: ['⏰', ''], update_ok: ['✅', ''], update_fail: ['⚠️', 'danger'], parent_change: ['👤', 'warn'], reboot: ['🔄', 'warn'], usage_mismatch: ['🧮', 'warn'], app_exit: ['💥', 'danger'], bg_restricted: ['🪫', 'danger'], offline: ['📵', 'warn'], online: ['📶', ''], outage_report: ['🧾', 'warn'] };
+const EVENT_ICON = { pin_ok: ['🔑', 'warn'], pin_locked: ['🚨', 'danger'], limit_reached: ['⏰', ''], update_ok: ['✅', ''], update_fail: ['⚠️', 'danger'], parent_change: ['👤', 'warn'], reboot: ['🔄', 'warn'], usage_mismatch: ['🧮', 'warn'], app_exit: ['💥', 'danger'], bg_restricted: ['🪫', 'danger'], offline: ['📵', 'warn'], online: ['📶', ''], outage_report: ['🧾', 'warn'], usage_access_lost: ['⏱️', 'danger'] };
 const ONLINE_MS = 3 * 60 * 1000;
 
 const state = {
@@ -556,7 +556,9 @@ function statusChips(d) {
     ${s.mobileData ? `<span class="chip">📶 이번 달 ${esc(fmtBytes(s.mobileData.monthBytes))}</span>` : ''}
     ${s.vpn === false ? '<span class="chip danger">인터넷 필터 꺼짐</span>' : ''}
     ${s.deviceOwner === false ? '<span class="chip danger">관리 권한 없음</span>' : ''}
-    ${s.bgRestricted ? '<span class="chip danger">배터리 제한됨</span>' : ''}`;
+    ${s.bgRestricted ? '<span class="chip danger">배터리 제한됨</span>' : ''}
+    ${s.usageAccess === false ? '<span class="chip danger">사용시간 측정 꺼짐</span>' : ''}
+    ${s.vpnHealthy === false && s.vpn ? '<span class="chip danger">인터넷 필터 멈춤</span>' : ''}`;
 }
 
 function renderHome() {
@@ -1613,13 +1615,16 @@ function diagCard(d) {
       <div class="row"><div class="grow">배터리 사용 제한</div><span class="sub" style="${r.bgRestricted ? 'color:var(--danger)' : ''}">${yesNo(r.bgRestricted, '제한됨 (앱이 꺼지면 다시 안 켜짐)', '정상')}</span></div>
       <div class="row"><div class="grow">강제 중지 차단</div><span class="sub">${yesNo(r.forceStopBlocked, '켜짐', '꺼짐')}</span></div>
       <div class="row"><div class="grow">관리 권한 · 인터넷 필터</div><span class="sub">${yesNo(r.deviceOwner, '정상', '없음')} · ${yesNo(r.vpn, '작동 중', '꺼짐')}</span></div>
-      <div class="row"><div class="grow">네트워크</div><span class="sub">${esc(r.network)}</span></div>
+      <div class="row"><div class="grow">네트워크</div><span class="sub">${esc(r.networkType ?? (typeof r.network === 'string' ? r.network : '-'))}</span></div>
+      ${r.usageAccess != null ? `<div class="row"><div class="grow">사용시간 측정 권한</div><span class="sub" style="${r.usageAccess ? '' : 'color:var(--danger)'}">${r.usageAccess ? '정상' : '꺼짐 (한도·취침시간 적용 안 됨)'}</span></div>` : ''}
+      ${r.vpnHealthy != null ? `<div class="row"><div class="grow">인터넷 필터 동작</div><span class="sub" style="${r.vpnHealthy ? '' : 'color:var(--danger)'}">${r.vpnHealthy ? '정상' : '멈춤'}</span></div>` : ''}
+      ${r.lastCrash ? `<div class="row"><div class="grow">마지막 앱 오류 <span class="sub">(${esc(r.lastCrash.summary)})</span></div><span class="sub">${esc(r.lastCrash.time)}</span></div>` : ''}
       <div class="row"><div class="grow">남은 메모리</div><span class="sub">${esc(r.memoryAvailMb)} / ${esc(r.memoryTotalMb)} MB${r.lowMemory ? ' (부족)' : ''}</span></div>
       ${r.cloudError ? `<div class="row"><div class="grow">최근 서버 오류</div><span class="sub">${esc(r.cloudError)}</span></div>` : ''}
       <h3 style="margin:14px 0 6px">앱이 꺼진 기록</h3>
       ${(r.exits || []).length ? r.exits.map((x) => `<div class="row"><div class="grow">${esc(x.reason)}${x.description ? ` <span class="sub">(${esc(x.description)})</span>` : ''}</div><span class="sub">${esc(fmtAt(x.at))}</span></div>`).join('') : '<p class="sub">없음</p>'}
-      <details style="margin-top:10px"><summary>최근 24시간 네트워크·통신 기록 (${(r.network || []).length}건)</summary>
-        ${(r.network || []).map((e) => `<div class="row"><div class="grow">${esc(e.kind)}${e.detail ? ` <span class="sub">(${esc(e.detail)})</span>` : ''}</div><span class="sub">${esc(fmtAt(e.at))}</span></div>`).join('')}
+      <details style="margin-top:10px"><summary>최근 24시간 네트워크·통신 기록 (${(Array.isArray(r.network) ? r.network : []).length}건)</summary>
+        ${(Array.isArray(r.network) ? r.network : []).map((e) => `<div class="row"><div class="grow">${esc(e.kind)}${e.detail ? ` <span class="sub">(${esc(e.detail)})</span>` : ''}</div><span class="sub">${esc(fmtAt(e.at))}</span></div>`).join('')}
       </details>
       <details style="margin-top:10px"><summary>최근 3시간 화면·앱 기록 (${(r.events || []).length}건)</summary>
         ${(r.events || []).map((e) => `<div class="row"><div class="grow">${esc(e.kind)}${e.app ? ` · ${esc(e.app)}` : ''}${e.screen ? ` <span class="sub">(${esc(e.screen)})</span>` : ''}</div><span class="sub">${esc(fmtAt(e.at))}</span></div>`).join('')}
