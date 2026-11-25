@@ -50,7 +50,7 @@ const MODES = [
   { id: 'call_only', name: '통화만', color: 'var(--warn)', desc: '전화와 연락처만 쓸 수 있습니다. 홈 화면·알림창·다른 앱은 막힙니다.' },
   { id: 'locked', name: '잠금', color: 'var(--danger)', desc: '잠금 안내 화면만 보입니다. 걸려 오는 전화와 긴급 전화만 가능합니다.' },
 ];
-const EVENT_ICON = { pin_ok: ['🔑', 'warn'], pin_locked: ['🚨', 'danger'], limit_reached: ['⏰', ''], update_ok: ['✅', ''], update_fail: ['⚠️', 'danger'], parent_change: ['👤', 'warn'], reboot: ['🔄', 'warn'], usage_mismatch: ['🧮', 'warn'], app_exit: ['💥', 'danger'], bg_restricted: ['🪫', 'danger'], offline: ['📵', 'warn'], online: ['📶', ''] };
+const EVENT_ICON = { pin_ok: ['🔑', 'warn'], pin_locked: ['🚨', 'danger'], limit_reached: ['⏰', ''], update_ok: ['✅', ''], update_fail: ['⚠️', 'danger'], parent_change: ['👤', 'warn'], reboot: ['🔄', 'warn'], usage_mismatch: ['🧮', 'warn'], app_exit: ['💥', 'danger'], bg_restricted: ['🪫', 'danger'], offline: ['📵', 'warn'], online: ['📶', ''], outage_report: ['🧾', 'warn'] };
 const ONLINE_MS = 3 * 60 * 1000;
 
 const state = {
@@ -1618,6 +1618,9 @@ function diagCard(d) {
       ${r.cloudError ? `<div class="row"><div class="grow">최근 서버 오류</div><span class="sub">${esc(r.cloudError)}</span></div>` : ''}
       <h3 style="margin:14px 0 6px">앱이 꺼진 기록</h3>
       ${(r.exits || []).length ? r.exits.map((x) => `<div class="row"><div class="grow">${esc(x.reason)}${x.description ? ` <span class="sub">(${esc(x.description)})</span>` : ''}</div><span class="sub">${esc(fmtAt(x.at))}</span></div>`).join('') : '<p class="sub">없음</p>'}
+      <details style="margin-top:10px"><summary>최근 24시간 네트워크·통신 기록 (${(r.network || []).length}건)</summary>
+        ${(r.network || []).map((e) => `<div class="row"><div class="grow">${esc(e.kind)}${e.detail ? ` <span class="sub">(${esc(e.detail)})</span>` : ''}</div><span class="sub">${esc(fmtAt(e.at))}</span></div>`).join('')}
+      </details>
       <details style="margin-top:10px"><summary>최근 3시간 화면·앱 기록 (${(r.events || []).length}건)</summary>
         ${(r.events || []).map((e) => `<div class="row"><div class="grow">${esc(e.kind)}${e.app ? ` · ${esc(e.app)}` : ''}${e.screen ? ` <span class="sub">(${esc(e.screen)})</span>` : ''}</div><span class="sub">${esc(fmtAt(e.at))}</span></div>`).join('')}
       </details>`
