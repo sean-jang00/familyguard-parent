@@ -727,7 +727,7 @@ function renderDevice(d) {
           <div class="sub">${isOnline(d) ? '오늘 사용' : `오늘 사용 · ${esc(d.last_seen ? hhmm(d.last_seen) : '-')} 마지막 연결 기준`}</div>
           <div class="big">${fmtDuration(s.screenTimeMs)}</div>
           <div class="sub">${effTotal(p) != null
-            ? `하루 한도 ${esc(limitName(p.totalDailyLimitMin))}${activeBonus(p) ? ` <b style="color:var(--accent)">+${fmtDuration(activeBonus(p) * 60000)}</b>` : ''} · ${limited >= effTotal(p) * 60000 ? '<b style="color:var(--danger)">다 사용함</b>' : `남은 시간 ${fmtDuration(effTotal(p) * 60000 - limited)}`}`
+            ? `하루 한도 ${esc(limitName(p.totalDailyLimitMin))}${activeBonus(p) ? ` <b style="color:var(--accent)">+${fmtDuration(activeBonus(p) * 60000)}</b>` : ''} · 한도에 포함 ${fmtDuration(limited)} · ${limited >= effTotal(p) * 60000 ? '<b style="color:var(--danger)">다 사용함</b>' : `남은 시간 ${fmtDuration(effTotal(p) * 60000 - limited)}`}`
             : '하루 한도 없음'} · 잠금 해제 ${esc(s.unlocks ?? 0)}회</div>
         </div>
       </div>
@@ -1162,7 +1162,7 @@ function tabLimits(d, s, p) {
     <div class="card">
       <div class="card-head"><h2>하루 전체 사용 한도</h2></div>
       <div class="row">
-        <div class="grow sub">한도를 다 쓰면 '항상 허용' 앱과 전화·문자만 쓸 수 있어요. 5분 전에 아이에게 알려 줍니다.</div>
+        <div class="grow sub">한도를 다 쓰면 '한도 제외' 앱과 전화·문자만 쓸 수 있어요. 5분 전에 아이에게 알려 줍니다.</div>
         <select id="totalLimit" aria-label="하루 전체 사용 한도">${TOTAL_LIMITS.map(([v, t]) => `<option value="${v ?? ''}" ${v === (p.totalDailyLimitMin ?? null) ? 'selected' : ''}>${t}</option>`).join('')}</select>
       </div>
       <div class="row">
@@ -1177,7 +1177,7 @@ function tabLimits(d, s, p) {
 
     <div class="card">
       <div class="card-head"><h2>취침시간</h2></div>
-      ${sw('bedtime', p.bedtimeEnabled, '취침시간 사용', '이 시간에는 \'항상 허용\' 앱과 전화·문자만 사용')}
+      ${sw('bedtime', p.bedtimeEnabled, '취침시간 사용', '이 시간에는 \'한도 제외\' 앱과 전화·문자만 사용')}
       <div class="row"><div class="grow">시작</div><input type="time" id="bedStart" value="${toClock(p.bedtimeStartMin)}"></div>
       <div class="row"><div class="grow">종료</div><input type="time" id="bedEnd" value="${toClock(p.bedtimeEndMin)}"></div>
     </div>
@@ -1191,18 +1191,24 @@ function tabLimits(d, s, p) {
 
     <div class="card">
       <div class="card-head"><h2>앱별 한도</h2><span class="sub">${appList.length}개</span></div>
-      <p class="sub" style="margin-top:-4px">☑ 항상 허용: 취침시간과 하루 전체 한도에서 빠집니다 (학원앱, 사전 등).</p>
+      <p class="sub" style="margin-top:-4px">☑ 한도 제외: 체크한 앱은 하루 전체 한도와 취침시간에 걸리지 않아요 (학원앱, 사전 등). 차단이 아닙니다. 막으려면 오른쪽에서 '차단'을 고르세요.</p>
+      ${(() => {
+        const n = appList.filter(([pkg]) => p.alwaysAllowed.includes(pkg)).length;
+        return n && n >= appList.length / 2
+          ? `<p class="sub" style="color:var(--danger)">⚠ ${n}개 앱이 한도 제외예요. 이 앱들은 하루 전체 한도에 시간이 쌓이지 않고 취침시간에도 열려요 (오른쪽에서 '차단'이나 시간을 정한 앱은 그 한도만 적용).</p>`
+          : '';
+      })()}
       ${appList.length ? `
       <div class="bulk">
         <div class="btns">
-          <button class="btn small" data-bulk="check-all">☑ 전체 체크</button>
+          <button class="btn small" data-bulk="check-all">☑ 전체 한도 제외</button>
           <button class="btn small" data-bulk="uncheck-all">☐ 전체 해제</button>
         </div>
         <div class="row" style="border:0">
           <select id="bulkLimit" aria-label="일괄 적용할 한도">${APP_LIMITS.map(([v, t]) => `<option value="${v ?? ''}">${t}</option>`).join('')}</select>
           <button class="btn small primary" data-bulk="apply" style="flex:1">모든 앱에 적용</button>
         </div>
-        <div class="sub">체크한 앱(항상 허용)은 일괄 적용에서 빠집니다. '제한 없음'을 고르면 모든 한도를 풉니다.</div>
+        <div class="sub">체크한 앱(한도 제외)은 일괄 적용에서 빠집니다. '제한 없음'을 고르면 모든 한도를 풉니다.</div>
         <input type="search" id="appSearch" placeholder="앱 이름 검색" value="${esc(state.appSearch || '')}" autocomplete="off">
       </div>` : ''}
       ${appList.length ? appList.map(([pkg, label]) => {
@@ -1210,9 +1216,9 @@ function tabLimits(d, s, p) {
         const q = (state.appSearch || '').trim().toLowerCase();
         const hidden = q && !label.toLowerCase().includes(q) && !pkg.toLowerCase().includes(q);
         return `<div class="row" data-app-row="${esc(`${label} ${pkg}`.toLowerCase())}" ${hidden ? 'hidden' : ''}>
-          <input type="checkbox" class="check" data-allow="${esc(pkg)}" ${p.alwaysAllowed.includes(pkg) ? 'checked' : ''} aria-label="${esc(label)} 항상 허용">
+          <input type="checkbox" class="check" data-allow="${esc(pkg)}" ${p.alwaysAllowed.includes(pkg) ? 'checked' : ''} aria-label="${esc(label)} 한도 제외">
           ${avatar(label, pkg)}
-          <div class="grow ellipsis">${esc(label)}</div>
+          <div class="grow ellipsis">${esc(label)}${p.alwaysAllowed.includes(pkg) ? ' <span class="sub">· 한도 제외</span>' : ''}</div>
           <select data-limit="${esc(pkg)}" aria-label="${esc(label)} 하루 한도">${APP_LIMITS.map(([v, t]) => `<option value="${v ?? ''}" ${v === lim ? 'selected' : ''}>${t}</option>`).join('')}</select>
         </div>`;
       }).join('') : '<div class="empty">폰에서 앱 목록을 아직 받지 못했습니다.</div>'}
@@ -1746,7 +1752,15 @@ function bindDevice(d, s, p) {
 
   // 앱별 한도 일괄 처리
   const allPkgs = [...$app.querySelectorAll('[data-allow]')].map((el) => el.dataset.allow);
-  bind('[data-bulk=check-all]', 'click', () => savePolicy(d, { alwaysAllowed: [...new Set([...p.alwaysAllowed, ...allPkgs])] }, '모든 앱을 항상 허용으로 체크했습니다'));
+  bind('[data-bulk=check-all]', 'click', (e) => {
+    const b = e.currentTarget;
+    if (!b.dataset.confirm) {
+      b.dataset.confirm = '1';
+      b.textContent = '모든 앱이 하루 한도·취침시간에서 빠져요 — 한 번 더 누르세요';
+      return;
+    }
+    savePolicy(d, { alwaysAllowed: [...new Set([...p.alwaysAllowed, ...allPkgs])] }, '모든 앱을 한도 제외로 체크했습니다');
+  });
   bind('[data-bulk=uncheck-all]', 'click', () => savePolicy(d, { alwaysAllowed: p.alwaysAllowed.filter((x) => !allPkgs.includes(x)) }, '모든 체크를 해제했습니다'));
   bind('[data-bulk=apply]', 'click', (e) => {
     const b = e.currentTarget;
