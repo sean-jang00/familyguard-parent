@@ -1570,7 +1570,7 @@ function updateCard(s) {
       <div class="card-head"><h2>폰 앱 업데이트</h2></div>
       ${status}
       <p class="sub" style="margin:4px 0 10px">PC에서 만든 APK 파일을 고르면 폰으로 보냅니다. 따님이 폰을 쓰는 중이면 화면이 꺼질 때까지 기다렸다가 조용히 설치해요.</p>
-      <label class="row" style="min-height:0;gap:8px"><input type="checkbox" id="updAnyNet"> <span class="sub">모바일 데이터로도 받기 (약 30MB)</span></label>
+      <label class="row" style="min-height:0;gap:8px"><input type="checkbox" id="updAnyNet"> <span class="sub">모바일 데이터로도 받기 (약 3MB)</span></label>
       <input type="file" id="updFile" accept=".apk,application/vnd.android.package-archive" hidden>
       <button class="btn primary full" id="updPick" style="margin-top:8px">APK 파일 선택해서 보내기</button>
     </div>`;
