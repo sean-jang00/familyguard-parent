@@ -50,7 +50,7 @@ const MODES = [
   { id: 'call_only', name: '통화만', color: 'var(--warn)', desc: '전화와 연락처만 쓸 수 있습니다. 홈 화면·알림창·다른 앱은 막힙니다.' },
   { id: 'locked', name: '잠금', color: 'var(--danger)', desc: '잠금 안내 화면만 보입니다. 걸려 오는 전화와 긴급 전화만 가능합니다.' },
 ];
-const EVENT_ICON = { pin_ok: ['🔑', 'warn'], pin_locked: ['🚨', 'danger'], limit_reached: ['⏰', ''], update_ok: ['✅', ''], update_fail: ['⚠️', 'danger'], parent_change: ['👤', 'warn'], reboot: ['🔄', 'warn'], usage_mismatch: ['🧮', 'warn'], app_exit: ['💥', 'danger'], bg_restricted: ['🪫', 'danger'], offline: ['📵', 'warn'], online: ['📶', ''], outage_report: ['🧾', 'warn'], usage_access_lost: ['⏱️', 'danger'] };
+const EVENT_ICON = { pin_ok: ['🔑', 'warn'], pin_locked: ['🚨', 'danger'], limit_reached: ['⏰', ''], update_ok: ['✅', ''], update_fail: ['⚠️', 'danger'], parent_change: ['👤', 'warn'], reboot: ['🔄', 'warn'], usage_mismatch: ['🧮', 'warn'], app_exit: ['💥', 'danger'], bg_restricted: ['🪫', 'danger'], offline: ['📵', 'warn'], online: ['📶', ''], outage_report: ['🧾', 'warn'], usage_access_lost: ['⏱️', 'danger'], device_removed: ['🔌', 'danger'], events_hidden: ['🙈', 'warn'] };
 const ONLINE_MS = 3 * 60 * 1000;
 
 const state = {
@@ -154,7 +154,7 @@ async function loadDevices() {
     ids.length
       ? run(sb.from('commands').select('id,device_id,type,payload,created_at,done_at,result').in('device_id', ids).order('id', { ascending: false }).limit(30))
       : [],
-    run(sb.from('events').select('id,device_id,type,title,body,created_at').eq('family_id', state.family.id).order('id', { ascending: false }).limit(40)),
+    run(sb.from('events').select('id,device_id,type,title,body,created_at').eq('family_id', state.family.id).is('hidden_at', null).order('id', { ascending: false }).limit(40)),
   ]);
   state.commands = cmds;
   state.events = evs;
@@ -673,9 +673,8 @@ async function clearEvents(btn, d) {
     setTimeout(() => { if (btn.isConnected) { delete btn.dataset.confirm; btn.textContent = d ? '비우기' : '알림 비우기'; } }, 4000);
     return;
   }
-  let q = sb.from('events').delete().eq('family_id', state.family.id);
-  if (d) q = q.eq('device_id', d.id);
-  await run(q, '알림을 비웠습니다');
+  // 지우지 않고 숨긴다 (서버에 기록이 남고, 숨긴 사실도 알림으로 남는다).
+  await run(sb.rpc('hide_events', { target_device: d ? d.id : null }), '알림을 비웠습니다 (기록은 서버에 보관)');
   state.events = d ? state.events.filter((e) => e.device_id !== d.id) : [];
   render();
 }
