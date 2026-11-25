@@ -14,7 +14,7 @@ const $toast = document.getElementById('toast');
 const DEFAULT_POLICY = {
   dailyLimitsMin: {}, bedtimeEnabled: false, bedtimeStartMin: 22 * 60, bedtimeEndMin: 7 * 60,
   alwaysAllowed: [], blockAdb: false, blockedServices: [], familyFilter: true, mode: 'normal', totalDailyLimitMin: null,
-  locationIntervalMin: 10, resetMin: 7 * 60, bonusMin: 0, bonusUntil: 0, dataCycleDay: 1,
+  locationIntervalMin: 10, resetMin: 7 * 60, bonusMin: 0, bonusUntil: 0, dataCycleDay: 1, phonePinDisabled: false,
 };
 // 부모가 준 추가 시간: 다음 초기화 시각까지만 유효 (폰의 Policy.withBonus와 같은 규칙)
 const activeBonus = (p) => (Date.now() < (p.bonusUntil || 0) ? (p.bonusMin || 0) : 0);
@@ -49,7 +49,7 @@ const MODES = [
   { id: 'call_only', name: '통화만', color: 'var(--warn)', desc: '전화와 연락처만 쓸 수 있습니다. 홈 화면·알림창·다른 앱은 막힙니다.' },
   { id: 'locked', name: '잠금', color: 'var(--danger)', desc: '잠금 안내 화면만 보입니다. 걸려 오는 전화와 긴급 전화만 가능합니다.' },
 ];
-const EVENT_ICON = { pin_ok: ['🔑', 'warn'], pin_locked: ['🚨', 'danger'], limit_reached: ['⏰', ''], update_ok: ['✅', ''], update_fail: ['⚠️', 'danger'], parent_change: ['👤', 'warn'], reboot: ['🔄', 'warn'], usage_mismatch: ['🧮', 'warn'], app_exit: ['💥', 'danger'], bg_restricted: ['🪫', 'danger'], offline: ['📵', 'warn'], online: ['📶', ''], outage_report: ['🧾', 'warn'], usage_access_lost: ['⏱️', 'danger'], device_removed: ['🔌', 'danger'], events_hidden: ['🙈', 'warn'] };
+const EVENT_ICON = { pin_ok: ['🔑', 'warn'], pin_locked: ['🚨', 'danger'], limit_reached: ['⏰', ''], update_ok: ['✅', ''], update_fail: ['⚠️', 'danger'], parent_change: ['👤', 'warn'], reboot: ['🔄', 'warn'], usage_mismatch: ['🧮', 'warn'], app_exit: ['💥', 'danger'], bg_restricted: ['🪫', 'danger'], offline: ['📵', 'warn'], online: ['📶', ''], outage_report: ['🧾', 'warn'], usage_access_lost: ['⏱️', 'danger'], device_removed: ['🔌', 'danger'], events_hidden: ['🙈', 'warn'], pin_blocked: ['🚫', 'danger'] };
 const ONLINE_MS = 3 * 60 * 1000;
 
 const state = {
@@ -1654,7 +1654,7 @@ function runDiag(d) {
     .finally(() => render());
 }
 
-function tabSettings(d, s) {
+function tabSettings(d, s, p) {
   const pushRow = {
     on: '<div class="row"><div class="grow"><div class="row-title">이 폰에서 알림 받는 중</div><div class="sub">부모 PIN 사용, 하루 한도 도달, 연결 끊김, 앱 꺼짐</div></div><button class="btn small" data-act="push-off">끄기</button></div>',
     off: '<div class="row"><div class="grow"><div class="row-title">이 폰에서 알림 받기</div><div class="sub">부모 PIN 사용, 하루 한도 도달, 연결 끊김, 앱 꺼짐</div></div><button class="btn primary small" data-act="push-on">켜기</button></div>',
@@ -1665,7 +1665,11 @@ function tabSettings(d, s) {
       ${pushRow}
     </div>
     <div class="card">
-      <div class="card-head"><h2>폰의 부모 PIN 변경</h2></div>
+      <div class="card-head"><h2>폰의 부모 PIN</h2></div>
+      ${sw('phonePin', !p.phonePinDisabled, '딸 폰에서 부모 PIN 쓰기',
+        p.phonePinDisabled
+          ? '꺼짐 · 딸 폰의 잠금 화면에 PIN 버튼이 없고, 부모 설정도 열리지 않아요. 잠금·모드는 이 웹앱에서만 바꿀 수 있어요. 누가 열려고 하면 알려 드려요.'
+          : '켜짐 · 딸 폰에서 PIN으로 잠금을 풀거나 부모 설정을 열 수 있어요. 끄면 이 웹앱에서만 바꿀 수 있어요.')}
       <p class="sub" style="margin-top:-4px">PIN 원문은 서버에 보내지 않고, 암호화한 값만 폰에 전달합니다. 이 웹앱의 앱 잠금 PIN은 바뀌지 않습니다 (홈 화면 '이 폰 설정'에서 따로 바꾸세요).</p>
       <form id="pinForm" class="row" autocomplete="off">
         <input type="password" name="pin" inputmode="numeric" pattern="[0-9]{4,8}" minlength="4" maxlength="8" placeholder="새 PIN (숫자 4~8자리)" required style="flex:1">
@@ -1778,6 +1782,12 @@ function bindDevice(d, s, p) {
   // 설정
   bind('[data-act=push-on]', 'click', enablePush);
   bind('[data-act=push-off]', 'click', disablePush);
+  q('#phonePin')?.addEventListener('change', (e) => {
+    if (!e.target.checked) return savePolicy(d, { phonePinDisabled: true }, '딸 폰에서 부모 PIN을 못 쓰게 했습니다');
+    // 다시 켜는 것은 보호를 푸는 것이므로 이 기기의 앱 잠금 PIN을 확인한다 (서버도 모든 보호자에게 알린다).
+    e.target.checked = false;
+    askPin('딸 폰의 PIN 입력을 켜려면', () => savePolicy(d, { phonePinDisabled: false }, '딸 폰에서 부모 PIN을 다시 쓸 수 있게 했습니다'));
+  });
   q('#pinForm')?.addEventListener('submit', async (e) => {
     e.preventDefault();
     const pin = new FormData(e.target).get('pin');
